@@ -702,17 +702,22 @@ async def test_twilio(phone: str):
 
 
 @app.get("/admin/test-image/{phone}")
-async def test_image(phone: str):
+async def test_image(phone: str, source: str = "unsplash"):
     """Test sending an image via Twilio with detailed response."""
     try:
         from twilio.rest import Client
         client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
 
-        # Use a standard JPG image
-        test_image_url = "https://images.unsplash.com/photo-1515562141207-7a88fb7ce338?w=400"
+        # Test different image sources
+        if source == "bluestone":
+            test_image_url = "https://kinclimg0.bluestone.com/f_webp,c_scale,w_418,b_rgb:f0f0f0/giproduct/BISN0672N04_YAA18DIG6XXXXXXXX_ABCD00-PICS-00003-1024-49416.png"
+            caption = "🔥 BlueStone Test\n\nThe Cursive A Necklace\n₹50,989"
+        else:
+            test_image_url = "https://images.unsplash.com/photo-1515562141207-7a88fb7ce338?w=400"
+            caption = "🔥 Unsplash Test\n\nGold Jewelry Test"
 
         msg = client.messages.create(
-            body="🔥 Test Image from JewelClaw!\n\nGold Jewelry Test",
+            body=caption,
             from_=settings.twilio_whatsapp_number,
             to=f"whatsapp:{phone}",
             media_url=[test_image_url]
@@ -721,6 +726,7 @@ async def test_image(phone: str):
         return {
             "status": "sent",
             "phone": phone,
+            "source": source,
             "image_url": test_image_url,
             "twilio_sid": msg.sid,
             "twilio_status": msg.status,
