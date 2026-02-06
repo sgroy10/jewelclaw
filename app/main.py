@@ -703,17 +703,29 @@ async def test_twilio(phone: str):
 
 @app.get("/admin/test-image/{phone}")
 async def test_image(phone: str):
-    """Test sending an image via Twilio."""
+    """Test sending an image via Twilio with detailed response."""
     try:
-        # Use a standard JPG image that Twilio definitely supports
+        from twilio.rest import Client
+        client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
+
+        # Use a standard JPG image
         test_image_url = "https://images.unsplash.com/photo-1515562141207-7a88fb7ce338?w=400"
 
-        result = await whatsapp_service.send_message(
-            f"whatsapp:{phone}",
-            "🔥 Test Image from JewelClaw!\n\nGold Jewelry Test\nReply 'trends' for more",
-            media_url=test_image_url
+        msg = client.messages.create(
+            body="🔥 Test Image from JewelClaw!\n\nGold Jewelry Test",
+            from_=settings.twilio_whatsapp_number,
+            to=f"whatsapp:{phone}",
+            media_url=[test_image_url]
         )
-        return {"status": "sent" if result else "failed", "phone": phone, "image_url": test_image_url}
+
+        return {
+            "status": "sent",
+            "phone": phone,
+            "image_url": test_image_url,
+            "twilio_sid": msg.sid,
+            "twilio_status": msg.status,
+            "num_media": msg.num_media
+        }
     except Exception as e:
         import traceback
         return {"status": "error", "error": str(e), "trace": traceback.format_exc()}

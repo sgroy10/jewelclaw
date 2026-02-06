@@ -96,12 +96,14 @@ class WhatsAppService:
                         )
             else:
                 if media_url:
-                    self.client.messages.create(
+                    logger.info(f"Sending message with media_url: {media_url}")
+                    msg = self.client.messages.create(
                         body=message,
                         from_=self.from_number,
                         to=to_number,
                         media_url=[media_url]
                     )
+                    logger.info(f"Twilio response SID: {msg.sid}, status: {msg.status}")
                 else:
                     self.client.messages.create(
                         body=message,
