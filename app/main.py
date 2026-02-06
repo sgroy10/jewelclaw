@@ -701,6 +701,24 @@ async def test_twilio(phone: str):
         return {"status": "error", "error": str(e), "trace": traceback.format_exc()}
 
 
+@app.get("/admin/test-image/{phone}")
+async def test_image(phone: str):
+    """Test sending an image via Twilio."""
+    try:
+        # Use a simple public image for testing
+        test_image_url = "https://kinclimg0.bluestone.com/f_webp,c_scale,w_418,b_rgb:f0f0f0/giproduct/BISN0672N04_YAA18DIG6XXXXXXXX_ABCD00-PICS-00003-1024-49416.png"
+
+        result = await whatsapp_service.send_message(
+            f"whatsapp:{phone}",
+            "🔥 Test Image from JewelClaw!\n\nThe Cursive A Necklace\n₹50,989",
+            media_url=test_image_url
+        )
+        return {"status": "sent" if result else "failed", "phone": phone, "image_url": test_image_url}
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "trace": traceback.format_exc()}
+
+
 @app.get("/admin/simulate-gold/{phone}")
 async def simulate_gold(phone: str, db: AsyncSession = Depends(get_db)):
     """Simulate what happens when someone sends 'gold'."""
