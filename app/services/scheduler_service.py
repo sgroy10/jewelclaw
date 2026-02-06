@@ -90,8 +90,29 @@ class SchedulerService:
                 # Get market analysis
                 analysis = await metal_service.get_market_analysis(db, "Mumbai")
 
-                # Format morning brief
-                brief = metal_service.format_morning_brief(rate, analysis)
+                # Build rate data for AI analysis
+                from app.services.gold_service import MetalRateData
+                rate_data = MetalRateData(
+                    city=rate.city,
+                    rate_date=rate.rate_date,
+                    gold_24k=rate.gold_24k,
+                    gold_22k=rate.gold_22k,
+                    gold_18k=rate.gold_18k,
+                    gold_14k=rate.gold_14k,
+                    silver=rate.silver or 0,
+                    platinum=rate.platinum or 0,
+                    gold_usd_oz=rate.gold_usd_oz,
+                    silver_usd_oz=rate.silver_usd_oz,
+                    usd_inr=rate.usd_inr,
+                    mcx_gold_futures=getattr(rate, 'mcx_gold_futures', None),
+                    mcx_silver_futures=getattr(rate, 'mcx_silver_futures', None),
+                )
+
+                # Generate AI expert analysis
+                expert_analysis = await metal_service.generate_ai_expert_analysis(rate_data, analysis)
+
+                # Format morning brief with AI analysis
+                brief = metal_service.format_morning_brief(rate, analysis, expert_analysis)
 
                 # Get subscribed users
                 users = await whatsapp_service.get_subscribed_users(db)

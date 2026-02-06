@@ -122,10 +122,29 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
         return whatsapp_service.get_help_message()
 
     elif command == "gold_rate":
-        rate = await metal_service.get_current_rates(db, city)
+        rate = await metal_service.get_current_rates(db, city, force_refresh=True)
         if rate:
             analysis = await metal_service.get_market_analysis(db, city)
-            return metal_service.format_gold_rate_message(rate, analysis)
+            # Build rate data for AI analysis
+            from app.services.gold_service import MetalRateData
+            rate_data = MetalRateData(
+                city=rate.city,
+                rate_date=rate.rate_date,
+                gold_24k=rate.gold_24k,
+                gold_22k=rate.gold_22k,
+                gold_18k=rate.gold_18k,
+                gold_14k=rate.gold_14k,
+                silver=rate.silver or 0,
+                platinum=rate.platinum or 0,
+                gold_usd_oz=rate.gold_usd_oz,
+                silver_usd_oz=rate.silver_usd_oz,
+                usd_inr=rate.usd_inr,
+                mcx_gold_futures=getattr(rate, 'mcx_gold_futures', None),
+                mcx_silver_futures=getattr(rate, 'mcx_silver_futures', None),
+            )
+            # Generate AI expert analysis
+            expert_analysis = await metal_service.generate_ai_expert_analysis(rate_data, analysis)
+            return metal_service.format_morning_brief(rate, analysis, expert_analysis)
         return "Unable to fetch gold rates. Please try again."
 
     elif command == "silver_rate":
@@ -141,10 +160,29 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
         return "Unable to fetch platinum rates. Please try again."
 
     elif command == "analysis":
-        rate = await metal_service.get_current_rates(db, city)
+        rate = await metal_service.get_current_rates(db, city, force_refresh=True)
         analysis = await metal_service.get_market_analysis(db, city)
         if rate and analysis:
-            return metal_service.format_morning_brief(rate, analysis)
+            # Build rate data for AI analysis
+            from app.services.gold_service import MetalRateData
+            rate_data = MetalRateData(
+                city=rate.city,
+                rate_date=rate.rate_date,
+                gold_24k=rate.gold_24k,
+                gold_22k=rate.gold_22k,
+                gold_18k=rate.gold_18k,
+                gold_14k=rate.gold_14k,
+                silver=rate.silver or 0,
+                platinum=rate.platinum or 0,
+                gold_usd_oz=rate.gold_usd_oz,
+                silver_usd_oz=rate.silver_usd_oz,
+                usd_inr=rate.usd_inr,
+                mcx_gold_futures=getattr(rate, 'mcx_gold_futures', None),
+                mcx_silver_futures=getattr(rate, 'mcx_silver_futures', None),
+            )
+            # Generate AI expert analysis
+            expert_analysis = await metal_service.generate_ai_expert_analysis(rate_data, analysis)
+            return metal_service.format_morning_brief(rate, analysis, expert_analysis)
         return "Unable to generate market analysis. Please try again."
 
     return "Sorry, I didn't understand that. Type *help* for available commands."

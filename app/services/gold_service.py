@@ -502,7 +502,10 @@ class MetalService:
             platinum=rates.platinum,
             gold_usd_oz=rates.gold_usd_oz,
             silver_usd_oz=rates.silver_usd_oz,
+            platinum_usd_oz=rates.platinum_usd_oz,
             usd_inr=rates.usd_inr,
+            mcx_gold_futures=rates.mcx_gold_futures,
+            mcx_silver_futures=rates.mcx_silver_futures,
             source=rates.source
         )
         db.add(rate)
