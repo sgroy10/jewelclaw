@@ -939,14 +939,22 @@ Example good output:
             lines.append(f"_{analysis.recommendation_text}_")
         lines.append("")
 
-        # Add change summary - use calculated change_pct if available
+        # Add change summary - only show data we have
         day_change_pct = change_pct if change_pct != 0 else analysis.daily_change_percent
         day_symbol = cs if change_pct != 0 else ("↑" if analysis.daily_change_percent >= 0 else "↓")
 
-        week_symbol = "+" if analysis.weekly_change_percent >= 0 else ""
-        month_symbol = "+" if analysis.monthly_change_percent >= 0 else ""
+        change_parts = [f"Day {day_symbol}{abs(day_change_pct):.1f}%"]
 
-        lines.append(f"📈 *Change:* Day {day_symbol}{abs(day_change_pct):.1f}% | Week {week_symbol}{analysis.weekly_change_percent:.1f}% | Month {month_symbol}{analysis.monthly_change_percent:.1f}%")
+        # Only add week/month if we have data (not 0)
+        if analysis.weekly_change_percent != 0:
+            week_symbol = "+" if analysis.weekly_change_percent >= 0 else ""
+            change_parts.append(f"Week {week_symbol}{analysis.weekly_change_percent:.1f}%")
+
+        if analysis.monthly_change_percent != 0:
+            month_symbol = "+" if analysis.monthly_change_percent >= 0 else ""
+            change_parts.append(f"Month {month_symbol}{analysis.monthly_change_percent:.1f}%")
+
+        lines.append(f"📈 *Change:* {' | '.join(change_parts)}")
         lines.append("")
         lines.append("_Reply 'gold' for detailed rates_")
 
