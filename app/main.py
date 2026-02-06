@@ -411,6 +411,43 @@ async def simulate_gold(phone: str, db: AsyncSession = Depends(get_db)):
         return {"error": str(e), "trace": traceback.format_exc()}
 
 
+@app.get("/admin/conversations/{phone}")
+async def get_conversations(phone: str, limit: int = 10, db: AsyncSession = Depends(get_db)):
+    """View recent conversations with intelligence data (Phase 1)."""
+    from sqlalchemy import select, desc
+
+    # Find user
+    result = await db.execute(select(User).where(User.phone_number == phone))
+    user = result.scalar_one_or_none()
+    if not user:
+        return {"error": "User not found"}
+
+    # Get conversations
+    result = await db.execute(
+        select(Conversation)
+        .where(Conversation.user_id == user.id)
+        .order_by(desc(Conversation.created_at))
+        .limit(limit)
+    )
+    convs = result.scalars().all()
+
+    return {
+        "user": {"phone": user.phone_number, "name": user.name},
+        "count": len(convs),
+        "conversations": [
+            {
+                "role": c.role,
+                "content": c.content[:100] + "..." if len(c.content) > 100 else c.content,
+                "intent": c.intent,
+                "entities": c.entities,
+                "sentiment": c.sentiment,
+                "created_at": str(c.created_at)
+            }
+            for c in reversed(convs)
+        ]
+    }
+
+
 @app.get("/scheduler/status")
 async def scheduler_status():
     """Get scheduler job status."""
