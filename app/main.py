@@ -58,6 +58,11 @@ async def health_check():
     }
 
 
+# Simple in-memory deduplication for Twilio retries
+_processed_message_sids = set()
+_max_cached_sids = 1000
+
+
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(
     request: Request,
@@ -66,14 +71,27 @@ async def whatsapp_webhook(
     """Handle incoming WhatsApp messages from Twilio."""
     try:
         form_data = await request.form()
+        form_dict = dict(form_data)
+
+        # Deduplicate Twilio retries using MessageSid
+        message_sid = form_dict.get("MessageSid", "")
+        if message_sid:
+            if message_sid in _processed_message_sids:
+                logger.info(f"Skipping duplicate message: {message_sid}")
+                return PlainTextResponse("")
+            _processed_message_sids.add(message_sid)
+            # Limit cache size
+            if len(_processed_message_sids) > _max_cached_sids:
+                _processed_message_sids.clear()
+
         phone_number, message_body, profile_name = whatsapp_service.parse_incoming_message(
-            dict(form_data)
+            form_dict
         )
 
         if not phone_number or not message_body:
             return PlainTextResponse("")
 
-        logger.info(f"Message from {phone_number}: {message_body[:50]}...")
+        logger.info(f"Message from {phone_number}: {message_body[:50]}... (SID: {message_sid})")
 
         # Get or create user
         user, is_new_user = await whatsapp_service.get_or_create_user(db, phone_number, profile_name)

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, field
 import httpx
+import pytz
 from bs4 import BeautifulSoup
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
@@ -16,6 +17,9 @@ from sqlalchemy import select, desc
 from app.models import MetalRate
 import anthropic
 from app.config import settings
+
+# Indian Standard Time
+IST = pytz.timezone('Asia/Kolkata')
 
 logger = logging.getLogger(__name__)
 
@@ -528,7 +532,7 @@ class MetalService:
     ) -> MarketAnalysis:
         """Generate smart market analysis."""
         analysis = MarketAnalysis()
-        now = datetime.now()
+        now = datetime.now(IST)
         city_normalized = city.title()
 
         # Get current rate
@@ -637,7 +641,7 @@ class MetalService:
         if not self.claude_client:
             return self._fallback_expert_analysis(rates, analysis)
 
-        now = datetime.now()
+        now = datetime.now(IST)
 
         # Build context for Claude
         prompt = f"""You are JewelClaw's expert gold market analyst. Generate a SPECIFIC, ACTIONABLE 3-4 line analysis for Indian jewelry businesses.
@@ -773,7 +777,7 @@ Example good output:
 
     def format_morning_brief(self, rates, analysis: MarketAnalysis, expert_analysis: str = None, scraped_data: 'MetalRateData' = None) -> str:
         """Format the beautiful morning brief message with ALL data."""
-        now = datetime.now()
+        now = datetime.now(IST)
 
         # Handle both MetalRate (db model) and MetalRateData (dataclass)
         gold_24k = getattr(rates, 'gold_24k', 0)
