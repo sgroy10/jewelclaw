@@ -93,26 +93,12 @@ async def whatsapp_webhook(
 
         logger.info(f"Message from {phone_number}: {message_body[:50]}... (SID: {message_sid})")
 
-        # Get or create user
-        user, is_new_user = await whatsapp_service.get_or_create_user(db, phone_number, profile_name)
+        # Get or create user (no welcome message)
+        user, _ = await whatsapp_service.get_or_create_user(db, phone_number, profile_name)
 
-        # Check rate limits
-        if not await whatsapp_service.check_rate_limit(db, user):
-            await whatsapp_service.send_rate_limit_message(phone_number)
-            return PlainTextResponse("")
-
-        # Send welcome message for new users
-        if is_new_user:
-            await whatsapp_service.send_welcome_message(phone_number, profile_name)
-
-        # Parse command
+        # Parse command and respond
         command = whatsapp_service.parse_command(message_body)
-
-        if command:
-            response = await handle_command(db, user, command, phone_number)
-        else:
-            # Default to gold rates for any other message
-            response = await handle_command(db, user, "gold_rate", phone_number)
+        response = await handle_command(db, user, command, phone_number)
 
         # Send response
         if response:
@@ -127,43 +113,27 @@ async def whatsapp_webhook(
 
 
 async def handle_command(db: AsyncSession, user, command: str, phone_number: str) -> str:
-    """Handle a parsed command and return response message."""
+    """Handle 4 simple commands: gold, subscribe, unsubscribe, help."""
     city = user.preferred_city or "Mumbai"
 
-    if command == "subscribe":
-        return await whatsapp_service.subscribe_user(db, user)
-
-    elif command == "unsubscribe":
-        return await whatsapp_service.unsubscribe_user(db, user)
-
-    elif command == "help":
-        return whatsapp_service.get_help_message()
-
-    elif command == "gold_rate":
-        # Fetch fresh scraped data (includes yesterday's rates for change calculation)
+    # 1. GOLD - Show gold rates
+    if command == "gold_rate":
         scraped_data = await metal_service.fetch_all_rates(city.lower())
         rate = await metal_service.get_current_rates(db, city, force_refresh=True)
 
         if rate and scraped_data:
             analysis = await metal_service.get_market_analysis(db, city)
-            # Generate AI expert analysis
             expert_analysis = await metal_service.generate_ai_expert_analysis(scraped_data, analysis)
             return metal_service.format_morning_brief(rate, analysis, expert_analysis, scraped_data)
         elif rate:
-            # Fallback if scraping failed but we have cached data
             analysis = await metal_service.get_market_analysis(db, city)
             from app.services.gold_service import MetalRateData
             rate_data = MetalRateData(
-                city=rate.city,
-                rate_date=rate.rate_date,
-                gold_24k=rate.gold_24k,
-                gold_22k=rate.gold_22k,
-                gold_18k=rate.gold_18k,
-                gold_14k=rate.gold_14k,
-                silver=rate.silver or 0,
-                platinum=rate.platinum or 0,
-                gold_usd_oz=rate.gold_usd_oz,
-                silver_usd_oz=rate.silver_usd_oz,
+                city=rate.city, rate_date=rate.rate_date,
+                gold_24k=rate.gold_24k, gold_22k=rate.gold_22k,
+                gold_18k=rate.gold_18k, gold_14k=rate.gold_14k,
+                silver=rate.silver or 0, platinum=rate.platinum or 0,
+                gold_usd_oz=rate.gold_usd_oz, silver_usd_oz=rate.silver_usd_oz,
                 usd_inr=rate.usd_inr,
                 mcx_gold_futures=getattr(rate, 'mcx_gold_futures', None),
                 mcx_silver_futures=getattr(rate, 'mcx_silver_futures', None),
@@ -172,49 +142,31 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
             return metal_service.format_morning_brief(rate, analysis, expert_analysis)
         return "Unable to fetch gold rates. Please try again."
 
-    elif command == "silver_rate":
-        rate = await metal_service.get_current_rates(db, city)
-        if rate and rate.silver:
-            return metal_service.format_silver_rate_message(rate)
-        return "Unable to fetch silver rates. Please try again."
+    # 2. SUBSCRIBE - Get 9 AM daily brief
+    elif command == "subscribe":
+        return await whatsapp_service.subscribe_user(db, user)
 
-    elif command == "platinum_rate":
-        rate = await metal_service.get_current_rates(db, city)
-        if rate:
-            return metal_service.format_platinum_rate_message(rate)
-        return "Unable to fetch platinum rates. Please try again."
+    # 3. UNSUBSCRIBE - Stop 9 AM daily brief
+    elif command == "unsubscribe":
+        return await whatsapp_service.unsubscribe_user(db, user)
 
-    elif command == "analysis":
-        # Fetch fresh scraped data (includes yesterday's rates)
-        scraped_data = await metal_service.fetch_all_rates(city.lower())
-        rate = await metal_service.get_current_rates(db, city, force_refresh=True)
-        analysis = await metal_service.get_market_analysis(db, city)
+    # 4. HELP - Show commands
+    elif command == "help":
+        return """*JewelClaw Commands*
 
-        if rate and analysis and scraped_data:
-            expert_analysis = await metal_service.generate_ai_expert_analysis(scraped_data, analysis)
-            return metal_service.format_morning_brief(rate, analysis, expert_analysis, scraped_data)
-        elif rate and analysis:
-            from app.services.gold_service import MetalRateData
-            rate_data = MetalRateData(
-                city=rate.city,
-                rate_date=rate.rate_date,
-                gold_24k=rate.gold_24k,
-                gold_22k=rate.gold_22k,
-                gold_18k=rate.gold_18k,
-                gold_14k=rate.gold_14k,
-                silver=rate.silver or 0,
-                platinum=rate.platinum or 0,
-                gold_usd_oz=rate.gold_usd_oz,
-                silver_usd_oz=rate.silver_usd_oz,
-                usd_inr=rate.usd_inr,
-                mcx_gold_futures=getattr(rate, 'mcx_gold_futures', None),
-                mcx_silver_futures=getattr(rate, 'mcx_silver_futures', None),
-            )
-            expert_analysis = await metal_service.generate_ai_expert_analysis(rate_data, analysis)
-            return metal_service.format_morning_brief(rate, analysis, expert_analysis)
-        return "Unable to generate market analysis. Please try again."
+*gold* - Get today's gold rates with expert analysis
 
-    return "Sorry, I didn't understand that. Type *help* for available commands."
+*subscribe* - Get 9 AM daily gold brief
+
+*unsubscribe* - Stop daily updates
+
+*help* - Show this message"""
+
+    # Unknown command - show help
+    else:
+        return """Type *gold* to get today's rates
+
+Other commands: *subscribe*, *unsubscribe*, *help*"""
 
 
 # API Endpoints
