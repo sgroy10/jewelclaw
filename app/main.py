@@ -599,6 +599,27 @@ async def migrate_trend_scout():
         return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
 
 
+@app.post("/admin/fix-designs-schema")
+async def fix_designs_schema():
+    """Fix designs table schema - add missing columns."""
+    from sqlalchemy import text
+    from app.database import engine
+
+    try:
+        async with engine.begin() as conn:
+            # Add created_at if missing
+            await conn.execute(text("""
+                ALTER TABLE designs ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()
+            """))
+            logger.info("Fixed designs schema")
+
+        return {"status": "success", "message": "Designs schema fixed"}
+
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
+
+
 @app.post("/admin/scrape-designs")
 async def admin_scrape_designs(db: AsyncSession = Depends(get_db)):
     """Manually trigger design scraping."""
