@@ -411,6 +411,47 @@ async def simulate_gold(phone: str, db: AsyncSession = Depends(get_db)):
         return {"error": str(e), "trace": traceback.format_exc()}
 
 
+@app.post("/admin/test-conversation/{phone}")
+async def test_conversation(phone: str, db: AsyncSession = Depends(get_db)):
+    """Test conversation storage (Phase 1 debug)."""
+    from sqlalchemy import select
+
+    try:
+        # Find user
+        result = await db.execute(select(User).where(User.phone_number == phone))
+        user = result.scalar_one_or_none()
+        if not user:
+            return {"error": "User not found", "phone": phone}
+
+        # Try to store a test conversation
+        await store_conversation(db, user.id, "user", "test message for debugging")
+        await db.commit()
+
+        # Verify it was stored
+        result = await db.execute(
+            select(Conversation).where(Conversation.user_id == user.id).order_by(Conversation.id.desc()).limit(1)
+        )
+        conv = result.scalar_one_or_none()
+
+        if conv:
+            return {
+                "status": "success",
+                "conversation": {
+                    "id": conv.id,
+                    "content": conv.content,
+                    "intent": conv.intent,
+                    "entities": conv.entities,
+                    "sentiment": conv.sentiment
+                }
+            }
+        else:
+            return {"status": "failed", "message": "Conversation not found after insert"}
+
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "trace": traceback.format_exc()}
+
+
 @app.get("/admin/conversations/{phone}")
 async def get_conversations(phone: str, limit: int = 10, db: AsyncSession = Depends(get_db)):
     """View recent conversations with intelligence data (Phase 1)."""
