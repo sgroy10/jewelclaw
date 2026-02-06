@@ -92,6 +92,8 @@ async def whatsapp_webhook(
         form_data = await request.form()
         form_dict = dict(form_data)
 
+        logger.info(f"WEBHOOK RECEIVED: {form_dict}")
+
         # Deduplicate Twilio retries using MessageSid
         message_sid = form_dict.get("MessageSid", "")
         if message_sid:
@@ -106,13 +108,17 @@ async def whatsapp_webhook(
             form_dict
         )
 
+        logger.info(f"PARSED: phone={phone_number}, body={message_body}, profile={profile_name}")
+
         if not phone_number or not message_body:
+            logger.warning("No phone or message body")
             return PlainTextResponse("")
 
         logger.info(f"Message from {phone_number}: {message_body[:50]}...")
 
         # Get or create user
         user, is_new_user = await whatsapp_service.get_or_create_user(db, phone_number, profile_name)
+        logger.info(f"USER: {user.phone_number}, new={is_new_user}")
 
         # Check if user is providing their name for subscription
         if phone_number in _pending_subscribe:
@@ -127,17 +133,23 @@ async def whatsapp_webhook(
         else:
             # Normal command handling
             command = whatsapp_service.parse_command(message_body)
+            logger.info(f"COMMAND: {command}")
             response = await handle_command(db, user, command, phone_number, is_new_user)
+            logger.info(f"RESPONSE LENGTH: {len(response) if response else 0}")
 
         # Send response
         if response:
-            await whatsapp_service.send_message(phone_number, response)
+            logger.info(f"SENDING to {phone_number}...")
+            sent = await whatsapp_service.send_message(phone_number, response)
+            logger.info(f"SENT: {sent}")
 
         await db.commit()
         return PlainTextResponse("")
 
     except Exception as e:
-        logger.error(f"Error processing webhook: {e}")
+        import traceback
+        logger.error(f"WEBHOOK ERROR: {e}")
+        logger.error(traceback.format_exc())
         return PlainTextResponse("")
 
 
@@ -295,6 +307,38 @@ async def test_twilio(phone: str):
     except Exception as e:
         import traceback
         return {"status": "error", "error": str(e), "trace": traceback.format_exc()}
+
+
+@app.get("/admin/simulate-gold/{phone}")
+async def simulate_gold(phone: str, db: AsyncSession = Depends(get_db)):
+    """Simulate what happens when someone sends 'gold'."""
+    try:
+        steps = []
+
+        # Step 1: Parse command
+        command = whatsapp_service.parse_command("gold")
+        steps.append(f"1. Command parsed: {command}")
+
+        # Step 2: Get user
+        user, is_new = await whatsapp_service.get_or_create_user(db, f"whatsapp:{phone}", "Test")
+        steps.append(f"2. User: {user.phone_number}, new={is_new}")
+
+        # Step 3: Get response
+        response = await handle_command(db, user, command, f"whatsapp:{phone}", is_new)
+        steps.append(f"3. Response length: {len(response) if response else 0}")
+        steps.append(f"4. Response preview: {response[:200] if response else 'None'}...")
+
+        # Step 4: Send
+        if response:
+            sent = await whatsapp_service.send_message(f"whatsapp:{phone}", response)
+            steps.append(f"5. Sent: {sent}")
+
+        await db.commit()
+        return {"steps": steps, "success": True}
+
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()}
 
 
 @app.get("/scheduler/status")
