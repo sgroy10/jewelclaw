@@ -4,6 +4,7 @@ Supports PostgreSQL (production) and SQLite (development/testing).
 Uses SQLAlchemy async for non-blocking database operations.
 """
 
+import os
 import logging
 from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -14,66 +15,130 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Configure database URL for async support
-database_url = settings.database_url
-
-# Railway uses postgres:// but SQLAlchemy needs postgresql://
-if database_url.startswith("postgres://"):
-    database_url = database_url.replace("postgres://", "postgresql://", 1)
-
-# Determine database type and configure appropriately
-if database_url.startswith("sqlite"):
-    # SQLite for local development/testing
-    if ":///" not in database_url:
-        database_url = database_url.replace("sqlite://", "sqlite:///")
-    database_url = database_url.replace("sqlite://", "sqlite+aiosqlite://", 1)
-    engine = create_async_engine(
-        database_url,
-        echo=settings.debug,
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    logger.info("Using SQLite database (development mode)")
-elif database_url.startswith("postgresql"):
-    # PostgreSQL for production
-    database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    engine = create_async_engine(
-        database_url,
-        echo=settings.debug,
-        poolclass=NullPool,  # Better for serverless/Railway
-        pool_pre_ping=True,  # Verify connections are alive
-    )
-    logger.info("Using PostgreSQL database (production mode)")
-else:
-    raise ValueError(f"Unsupported database URL format: {database_url}")
-
-# Session factory
-async_session_maker = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
-
 # Base class for models
 Base = declarative_base()
 
+# Global engine and session maker (initialized lazily)
+engine = None
+async_session_maker = None
+
+
+def _is_valid_postgres_url(url: str) -> bool:
+    """Check if PostgreSQL URL looks valid (not a placeholder)."""
+    if not url:
+        return False
+    if not url.startswith(("postgres://", "postgresql://")):
+        return False
+    # Check for common placeholder patterns
+    placeholders = ["localhost", "your-", "placeholder", "example", "user:password@host"]
+    for p in placeholders:
+        if p in url.lower():
+            return False
+    # Must have actual host after @
+    if "@" in url:
+        after_at = url.split("@")[1] if "@" in url else ""
+        if not after_at or after_at.startswith(":") or after_at.startswith("/"):
+            return False
+    return True
+
+
+def _get_database_url() -> str:
+    """Get and validate database URL, falling back to SQLite if needed."""
+    database_url = settings.database_url
+
+    # Check if it's a valid PostgreSQL URL
+    if _is_valid_postgres_url(database_url):
+        # Railway uses postgres:// but SQLAlchemy needs postgresql://
+        if database_url.startswith("postgres://"):
+            database_url = database_url.replace("postgres://", "postgresql://", 1)
+        return database_url
+
+    # Fall back to SQLite
+    logger.warning("DATABASE_URL not set or invalid, using SQLite")
+    return "sqlite:///./jewelclaw.db"
+
+
+def _create_engine():
+    """Create database engine based on URL."""
+    global engine, async_session_maker
+
+    database_url = _get_database_url()
+
+    if database_url.startswith("sqlite"):
+        # SQLite for local development/testing
+        if ":///" not in database_url:
+            database_url = database_url.replace("sqlite://", "sqlite:///")
+        database_url = database_url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+        engine = create_async_engine(
+            database_url,
+            echo=settings.debug,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        logger.info("Using SQLite database (development mode)")
+    elif database_url.startswith("postgresql"):
+        # PostgreSQL for production
+        database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        engine = create_async_engine(
+            database_url,
+            echo=settings.debug,
+            poolclass=NullPool,
+            pool_pre_ping=True,
+        )
+        logger.info("Using PostgreSQL database (production mode)")
+    else:
+        # Final fallback to SQLite
+        logger.warning(f"Unknown database URL format, falling back to SQLite")
+        database_url = "sqlite+aiosqlite:///./jewelclaw.db"
+        engine = create_async_engine(
+            database_url,
+            echo=settings.debug,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+
+    # Create session factory
+    async_session_maker = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+
+
+# Initialize engine on module load
+_create_engine()
+
 
 async def init_db():
-    """Initialize database tables."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables initialized")
+    """Initialize database tables. Won't crash if database unavailable."""
+    global engine
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("Database tables initialized")
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        logger.warning("App will continue but database features may not work")
 
 
 async def close_db():
     """Close database connections."""
-    await engine.dispose()
-    logger.info("Database connections closed")
+    global engine
+    if engine:
+        try:
+            await engine.dispose()
+            logger.info("Database connections closed")
+        except Exception as e:
+            logger.error(f"Error closing database: {e}")
 
 
 @asynccontextmanager
 async def get_db_session():
     """Get database session context manager."""
+    global async_session_maker
+    if not async_session_maker:
+        raise RuntimeError("Database not initialized")
+
     session = async_session_maker()
     try:
         yield session
