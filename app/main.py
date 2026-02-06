@@ -16,6 +16,7 @@ from app.models import User, Conversation, MetalRate
 from app.services.whatsapp_service import whatsapp_service
 from app.services.gold_service import metal_service
 from app.services.scheduler_service import scheduler_service
+from app.services.memory_service import memory_service
 
 # Configure logging
 logging.basicConfig(
@@ -82,6 +83,37 @@ Your AI-powered jewelry industry assistant.
 _Developed by Sandeep Roy_"""
 
 
+async def store_conversation(db: AsyncSession, user_id: int, role: str, message: str):
+    """Store conversation with intent/entity detection (Phase 1)."""
+    try:
+        # Analyze message if from user
+        if role == "user":
+            analysis = memory_service.analyze_message(message)
+            intent = analysis["intent"]
+            entities = analysis["entities"]
+            sentiment = analysis["sentiment"]
+        else:
+            intent = None
+            entities = {}
+            sentiment = None
+
+        # Create conversation record
+        conv = Conversation(
+            user_id=user_id,
+            role=role,
+            content=message,
+            intent=intent,
+            entities=entities,
+            sentiment=sentiment
+        )
+        db.add(conv)
+        await db.flush()
+        logger.info(f"Stored {role} message | intent={intent} | entities={entities}")
+    except Exception as e:
+        # Non-blocking - don't break webhook if storage fails
+        logger.warning(f"Failed to store conversation: {e}")
+
+
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(
     request: Request,
@@ -120,6 +152,9 @@ async def whatsapp_webhook(
         user, is_new_user = await whatsapp_service.get_or_create_user(db, phone_number, profile_name)
         logger.info(f"USER: {user.phone_number}, new={is_new_user}")
 
+        # Phase 1: Store incoming message with intelligence
+        await store_conversation(db, user.id, "user", message_body)
+
         # Check if user is providing their name for subscription
         if phone_number in _pending_subscribe:
             # User is responding with their name
@@ -142,6 +177,9 @@ async def whatsapp_webhook(
             logger.info(f"SENDING to {phone_number}...")
             sent = await whatsapp_service.send_message(phone_number, response)
             logger.info(f"SENT: {sent}")
+
+            # Phase 1: Store assistant response
+            await store_conversation(db, user.id, "assistant", response)
 
         await db.commit()
         return PlainTextResponse("")
@@ -293,6 +331,38 @@ async def admin_reset_database():
         error_detail = traceback.format_exc()
         logger.error(f"Reset failed: {error_detail}")
         return {"status": "error", "error": str(e), "detail": error_detail}
+
+
+@app.post("/admin/migrate-phase-1")
+async def migrate_phase_1():
+    """Phase 1: Add conversation intelligence columns."""
+    from sqlalchemy import text
+    from app.database import engine
+
+    try:
+        async with engine.begin() as conn:
+            # Add intent column
+            await conn.execute(text("""
+                ALTER TABLE conversations
+                ADD COLUMN IF NOT EXISTS intent VARCHAR(50)
+            """))
+            # Add entities column
+            await conn.execute(text("""
+                ALTER TABLE conversations
+                ADD COLUMN IF NOT EXISTS entities JSON DEFAULT '{}'
+            """))
+            # Add sentiment column
+            await conn.execute(text("""
+                ALTER TABLE conversations
+                ADD COLUMN IF NOT EXISTS sentiment VARCHAR(20)
+            """))
+            logger.info("Phase 1 migration complete")
+
+        return {"status": "success", "message": "Phase 1: Conversation intelligence columns added"}
+
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
 
 
 @app.get("/admin/test-twilio/{phone}")

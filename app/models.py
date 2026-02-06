@@ -10,7 +10,7 @@ Models:
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Text, Float, Boolean,
-    DateTime, ForeignKey, Index, Enum as SQLEnum
+    DateTime, ForeignKey, Index, Enum as SQLEnum, JSON
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -70,6 +70,11 @@ class Conversation(Base):
     content = Column(Text, nullable=False)
     detected_language = Column(String(20), nullable=True)
     created_at = Column(DateTime, server_default=func.now(), index=True)
+
+    # Phase 1: Conversation Intelligence
+    intent = Column(String(50), nullable=True)  # gold_price, subscribe, greeting, etc.
+    entities = Column(JSON, default={})  # {"metal": "gold", "city": "mumbai"}
+    sentiment = Column(String(20), nullable=True)  # positive, neutral, negative
 
     user = relationship("User", back_populates="conversations")
 
