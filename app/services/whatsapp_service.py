@@ -17,45 +17,29 @@ logger = logging.getLogger(__name__)
 
 # Command definitions
 COMMANDS = {
+    # Greeting commands
+    "hi": "greeting",
+    "hello": "greeting",
+    "hey": "greeting",
+    "hii": "greeting",
+    "hiii": "greeting",
+    "namaste": "greeting",
+
     # Subscribe commands
     "subscribe": "subscribe",
-    "start": "subscribe",
-    "morning brief on": "subscribe",
-    "daily updates on": "subscribe",
 
     # Unsubscribe commands
     "unsubscribe": "unsubscribe",
-    "stop": "unsubscribe",
-    "morning brief off": "unsubscribe",
-    "daily updates off": "unsubscribe",
 
     # Gold rate commands
     "gold": "gold_rate",
     "gold rate": "gold_rate",
     "gold rates": "gold_rate",
-    "gold price": "gold_rate",
-    "sona": "gold_rate",  # Hindi
-
-    # Silver commands
-    "silver": "silver_rate",
-    "silver rate": "silver_rate",
-    "silver price": "silver_rate",
-    "chandi": "silver_rate",  # Hindi
-
-    # Platinum commands
-    "platinum": "platinum_rate",
-    "platinum rate": "platinum_rate",
+    "sona": "gold_rate",
 
     # Help
     "help": "help",
-    "commands": "help",
     "menu": "help",
-    "?": "help",
-
-    # Analysis
-    "analysis": "analysis",
-    "market": "analysis",
-    "trend": "analysis",
 }
 
 

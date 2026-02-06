@@ -93,12 +93,12 @@ async def whatsapp_webhook(
 
         logger.info(f"Message from {phone_number}: {message_body[:50]}... (SID: {message_sid})")
 
-        # Get or create user (no welcome message)
-        user, _ = await whatsapp_service.get_or_create_user(db, phone_number, profile_name)
+        # Get or create user
+        user, is_new_user = await whatsapp_service.get_or_create_user(db, phone_number, profile_name)
 
         # Parse command and respond
         command = whatsapp_service.parse_command(message_body)
-        response = await handle_command(db, user, command, phone_number)
+        response = await handle_command(db, user, command, phone_number, is_new_user)
 
         # Send response
         if response:
@@ -112,11 +112,27 @@ async def whatsapp_webhook(
         return PlainTextResponse("")
 
 
-async def handle_command(db: AsyncSession, user, command: str, phone_number: str) -> str:
-    """Handle 4 simple commands: gold, subscribe, unsubscribe, help."""
+WELCOME_MESSAGE = """👋 *Welcome to JewelClaw!*
+Your AI-powered jewelry industry assistant.
+
+*Commands:*
+• *gold* - Get live gold rates
+• *subscribe* - Get daily 9 AM brief
+• *unsubscribe* - Stop daily briefs
+• *help* - Show this menu
+
+_Developed by Sandeep Roy_"""
+
+
+async def handle_command(db: AsyncSession, user, command: str, phone_number: str, is_new_user: bool = False) -> str:
+    """Handle 5 simple commands: hi/hello, gold, subscribe, unsubscribe, help."""
     city = user.preferred_city or "Mumbai"
 
-    # 1. GOLD - Show gold rates
+    # 1. NEW USER or HI/HELLO → Welcome message
+    if is_new_user or command == "greeting":
+        return WELCOME_MESSAGE
+
+    # 2. GOLD → Show gold rates
     if command == "gold_rate":
         scraped_data = await metal_service.fetch_all_rates(city.lower())
         rate = await metal_service.get_current_rates(db, city, force_refresh=True)
@@ -142,31 +158,24 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
             return metal_service.format_morning_brief(rate, analysis, expert_analysis)
         return "Unable to fetch gold rates. Please try again."
 
-    # 2. SUBSCRIBE - Get 9 AM daily brief
-    elif command == "subscribe":
-        return await whatsapp_service.subscribe_user(db, user)
+    # 3. SUBSCRIBE → Save for 9 AM daily brief
+    if command == "subscribe":
+        user.subscribed_to_morning_brief = True
+        await db.flush()
+        return "✅ Subscribed to 9 AM daily brief!"
 
-    # 3. UNSUBSCRIBE - Stop 9 AM daily brief
-    elif command == "unsubscribe":
-        return await whatsapp_service.unsubscribe_user(db, user)
+    # 4. UNSUBSCRIBE → Remove from daily brief
+    if command == "unsubscribe":
+        user.subscribed_to_morning_brief = False
+        await db.flush()
+        return "❌ Unsubscribed from daily briefs"
 
-    # 4. HELP - Show commands
-    elif command == "help":
-        return """*JewelClaw Commands*
+    # 5. HELP → Show welcome message
+    if command == "help":
+        return WELCOME_MESSAGE
 
-*gold* - Get today's gold rates with expert analysis
-
-*subscribe* - Get 9 AM daily gold brief
-
-*unsubscribe* - Stop daily updates
-
-*help* - Show this message"""
-
-    # Unknown command - show help
-    else:
-        return """Type *gold* to get today's rates
-
-Other commands: *subscribe*, *unsubscribe*, *help*"""
+    # Unknown command → Show welcome message
+    return WELCOME_MESSAGE
 
 
 # API Endpoints
