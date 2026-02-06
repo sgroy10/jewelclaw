@@ -131,6 +131,37 @@ class MetalService:
         if settings.anthropic_api_key:
             self.claude_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
+        # Cache for expert analysis (1 hour TTL)
+        self._expert_cache = {
+            "analysis": None,
+            "cached_at": None,
+            "cache_ttl": 3600  # 1 hour in seconds
+        }
+
+    def _is_cache_valid(self) -> bool:
+        """Check if expert analysis cache is still valid."""
+        if not self._expert_cache["cached_at"]:
+            return False
+        elapsed = (datetime.now(IST) - self._expert_cache["cached_at"]).total_seconds()
+        return elapsed < self._expert_cache["cache_ttl"]
+
+    async def get_cached_expert_analysis(self, rates, analysis) -> str:
+        """Get expert analysis from cache or generate new one."""
+        if self._is_cache_valid() and self._expert_cache["analysis"]:
+            logger.info("Using CACHED expert analysis (saves API cost)")
+            return self._expert_cache["analysis"]
+
+        # Generate new analysis
+        logger.info("Generating NEW expert analysis via Claude API")
+        new_analysis = await self.generate_ai_expert_analysis(rates, analysis)
+
+        # Cache it
+        self._expert_cache["analysis"] = new_analysis
+        self._expert_cache["cached_at"] = datetime.now(IST)
+        logger.info(f"Cached expert analysis until {(datetime.now(IST) + timedelta(hours=1)).strftime('%I:%M %p IST')}")
+
+        return new_analysis
+
     def _extract_rate(self, text: str) -> Optional[float]:
         """Extract numeric rate from text."""
         if not text:
@@ -775,7 +806,7 @@ Example good output:
 
         return "\n".join(lines)
 
-    def format_morning_brief(self, rates, analysis: MarketAnalysis, expert_analysis: str = None, scraped_data: 'MetalRateData' = None) -> str:
+    def format_morning_brief(self, rates, analysis: MarketAnalysis, expert_analysis: str = None, scraped_data: 'MetalRateData' = None, skip_header: bool = False) -> str:
         """Format the beautiful morning brief message with ALL data."""
         now = datetime.now(IST)
 
@@ -826,11 +857,23 @@ Example good output:
             change_text_18k = ""
             change_text_14k = ""
 
-        # Build the beautiful message
-        lines = [
-            f"🌅 *JewelClaw Gold Brief*",
-            f"📅 {now.strftime('%d %b %Y')} | {now.strftime('%I:%M %p')} IST",
-            "",
+        # Build the message
+        lines = []
+
+        # Add header unless skipped (for personalized morning briefs)
+        if not skip_header:
+            lines.extend([
+                f"🌅 *JewelClaw Gold Brief*",
+                f"📅 {now.strftime('%d %b %Y')} | {now.strftime('%I:%M %p')} IST",
+                "",
+            ])
+        else:
+            lines.extend([
+                f"📅 {now.strftime('%d %b %Y')} | {now.strftime('%I:%M %p')} IST",
+                "",
+            ])
+
+        lines.extend([
             "💰 *GOLD* (₹/gram)",
             f"24K: ₹{gold_24k:,.0f} {change_text_24k}",
             f"22K: ₹{gold_22k:,.0f} {change_text_22k}",

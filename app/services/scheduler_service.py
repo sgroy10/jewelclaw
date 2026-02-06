@@ -76,12 +76,14 @@ class SchedulerService:
             logger.info("Scheduler stopped")
 
     async def send_morning_briefs(self):
-        """Send morning brief to all subscribed users."""
-        logger.info("Starting morning brief distribution")
+        """Send personalized morning brief to all subscribed users."""
+        logger.info("=" * 50)
+        logger.info("STARTING 9 AM MORNING BRIEF DISTRIBUTION")
+        logger.info("=" * 50)
 
         try:
             async with get_db_session() as db:
-                # Fetch fresh scraped data (includes yesterday's rates for change calculation)
+                # Fetch fresh scraped data
                 scraped_data = await metal_service.fetch_all_rates("mumbai")
                 if not scraped_data:
                     logger.error("Could not scrape rates for morning brief")
@@ -96,28 +98,48 @@ class SchedulerService:
                 # Get market analysis
                 analysis = await metal_service.get_market_analysis(db, "Mumbai")
 
-                # Generate AI expert analysis using fresh scraped data
-                expert_analysis = await metal_service.generate_ai_expert_analysis(scraped_data, analysis)
-
-                # Format morning brief with scraped data (has yesterday values)
-                brief = metal_service.format_morning_brief(rate, analysis, expert_analysis, scraped_data)
+                # Get CACHED expert analysis (saves API cost)
+                expert_analysis = await metal_service.get_cached_expert_analysis(scraped_data, analysis)
 
                 # Get subscribed users
                 users = await whatsapp_service.get_subscribed_users(db)
-                logger.info(f"Sending morning brief to {len(users)} users")
+                logger.info(f"Found {len(users)} subscribed users")
 
-                # Send to each user
+                if not users:
+                    logger.info("No subscribers to send morning brief")
+                    return
+
+                # Send personalized message to each user
                 success_count = 0
                 for user in users:
                     try:
+                        # Personalized greeting
+                        name = user.name or "Friend"
+                        greeting = f"🌅 *Good Morning {name}!*\nHere's your JewelClaw Gold Brief...\n\n"
+
+                        # Format brief without the header (we add personalized one)
+                        brief_body = metal_service.format_morning_brief(
+                            rate, analysis, expert_analysis, scraped_data,
+                            skip_header=True
+                        )
+
+                        personalized_brief = greeting + brief_body
+
                         phone = f"whatsapp:{user.phone_number}"
-                        sent = await whatsapp_service.send_message(phone, brief)
+                        sent = await whatsapp_service.send_message(phone, personalized_brief)
+
                         if sent:
                             success_count += 1
-                    except Exception as e:
-                        logger.error(f"Error sending brief to {user.phone_number}: {e}")
+                            logger.info(f"SENT to {name} ({user.phone_number})")
+                        else:
+                            logger.error(f"FAILED to send to {name} ({user.phone_number})")
 
-                logger.info(f"Morning brief sent to {success_count}/{len(users)} users")
+                    except Exception as e:
+                        logger.error(f"Error sending to {user.phone_number}: {e}")
+
+                logger.info("=" * 50)
+                logger.info(f"MORNING BRIEF COMPLETE: {success_count}/{len(users)} sent")
+                logger.info("=" * 50)
 
         except Exception as e:
             logger.error(f"Error in morning brief job: {e}")
