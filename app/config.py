@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     debug: bool = Field(default=False)
     log_level: str = Field(default="INFO")
 
-    # Database
-    database_url: str = Field(default="postgresql://localhost:5432/jewelclaw")
+    # Database (Railway provides DATABASE_URL automatically)
+    database_url: str = Field(default="sqlite:///./jewelclaw.db")
 
     # Claude AI
     anthropic_api_key: str = Field(default="")

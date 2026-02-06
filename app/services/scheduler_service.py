@@ -22,8 +22,15 @@ class SchedulerService:
     """Service for managing scheduled tasks."""
 
     def __init__(self):
-        self.scheduler = AsyncIOScheduler(timezone=IST)
-        self._setup_jobs()
+        self.scheduler = None
+        self._initialized = False
+
+    def _ensure_initialized(self):
+        """Lazy initialize scheduler when needed."""
+        if not self._initialized:
+            self.scheduler = AsyncIOScheduler(timezone=IST)
+            self._setup_jobs()
+            self._initialized = True
 
     def _setup_jobs(self):
         """Configure scheduled jobs."""
@@ -57,13 +64,14 @@ class SchedulerService:
 
     def start(self):
         """Start the scheduler."""
+        self._ensure_initialized()
         if not self.scheduler.running:
             self.scheduler.start()
             logger.info("Scheduler started")
 
     def stop(self):
         """Stop the scheduler."""
-        if self.scheduler.running:
+        if self.scheduler and self.scheduler.running:
             self.scheduler.shutdown()
             logger.info("Scheduler stopped")
 
@@ -134,6 +142,8 @@ class SchedulerService:
 
     def get_job_status(self) -> dict:
         """Get status of all scheduled jobs."""
+        if not self.scheduler:
+            return {"status": "not_initialized"}
         jobs = {}
         for job in self.scheduler.get_jobs():
             jobs[job.id] = {
