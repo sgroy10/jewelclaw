@@ -604,6 +604,31 @@ async def migrate_trend_scout():
         return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
 
 
+@app.get("/admin/designs")
+async def get_designs(limit: int = 10, db: AsyncSession = Depends(get_db)):
+    """View designs in database."""
+    from sqlalchemy import select, desc
+    result = await db.execute(
+        select(Design).order_by(desc(Design.trending_score)).limit(limit)
+    )
+    designs = result.scalars().all()
+    return {
+        "count": len(designs),
+        "designs": [
+            {
+                "id": d.id,
+                "title": d.title,
+                "source": d.source,
+                "category": d.category,
+                "price": d.price_range_min,
+                "image_url": d.image_url,
+                "has_image": bool(d.image_url)
+            }
+            for d in designs
+        ]
+    }
+
+
 @app.post("/admin/fix-designs-schema")
 async def fix_designs_schema():
     """Fix designs table schema - add missing columns."""
