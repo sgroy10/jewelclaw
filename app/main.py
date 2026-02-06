@@ -283,6 +283,20 @@ async def admin_reset_database():
         return {"status": "error", "error": str(e), "detail": error_detail}
 
 
+@app.get("/admin/test-twilio/{phone}")
+async def test_twilio(phone: str):
+    """Test if Twilio can send a message."""
+    try:
+        result = await whatsapp_service.send_message(
+            f"whatsapp:{phone}",
+            "Test from JewelClaw - Twilio is working!"
+        )
+        return {"status": "sent" if result else "failed", "phone": phone}
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "trace": traceback.format_exc()}
+
+
 @app.get("/scheduler/status")
 async def scheduler_status():
     """Get scheduler job status."""
