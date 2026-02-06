@@ -705,12 +705,12 @@ async def test_twilio(phone: str):
 async def test_image(phone: str):
     """Test sending an image via Twilio."""
     try:
-        # Use a simple public image for testing
-        test_image_url = "https://kinclimg0.bluestone.com/f_webp,c_scale,w_418,b_rgb:f0f0f0/giproduct/BISN0672N04_YAA18DIG6XXXXXXXX_ABCD00-PICS-00003-1024-49416.png"
+        # Use a standard JPG image that Twilio definitely supports
+        test_image_url = "https://images.unsplash.com/photo-1515562141207-7a88fb7ce338?w=400"
 
         result = await whatsapp_service.send_message(
             f"whatsapp:{phone}",
-            "🔥 Test Image from JewelClaw!\n\nThe Cursive A Necklace\n₹50,989",
+            "🔥 Test Image from JewelClaw!\n\nGold Jewelry Test\nReply 'trends' for more",
             media_url=test_image_url
         )
         return {"status": "sent" if result else "failed", "phone": phone, "image_url": test_image_url}
