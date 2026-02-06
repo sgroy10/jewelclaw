@@ -591,7 +591,7 @@ class MetalService:
     ) -> MarketAnalysis:
         """Generate smart market analysis."""
         analysis = MarketAnalysis()
-        now = datetime.now(IST)
+        now = datetime.utcnow()  # Use UTC for database queries
         city_normalized = city.title()
 
         # Get current rate
