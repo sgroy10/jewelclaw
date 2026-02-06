@@ -891,7 +891,7 @@ Example good output:
             f"Silver: ${silver_usd_oz:,.2f}/oz",
             f"USD/INR: ₹{usd_inr:.2f}",
             "",
-        ]
+        ])
 
         # Add MCX futures if available
         if mcx_gold or mcx_silver:
