@@ -81,38 +81,26 @@ class SchedulerService:
 
         try:
             async with get_db_session() as db:
-                # Get fresh rates
+                # Fetch fresh scraped data (includes yesterday's rates for change calculation)
+                scraped_data = await metal_service.fetch_all_rates("mumbai")
+                if not scraped_data:
+                    logger.error("Could not scrape rates for morning brief")
+                    return
+
+                # Get database rate record
                 rate = await metal_service.get_current_rates(db, "Mumbai", force_refresh=True)
                 if not rate:
-                    logger.error("Could not fetch rates for morning brief")
+                    logger.error("Could not get rates for morning brief")
                     return
 
                 # Get market analysis
                 analysis = await metal_service.get_market_analysis(db, "Mumbai")
 
-                # Build rate data for AI analysis
-                from app.services.gold_service import MetalRateData
-                rate_data = MetalRateData(
-                    city=rate.city,
-                    rate_date=rate.rate_date,
-                    gold_24k=rate.gold_24k,
-                    gold_22k=rate.gold_22k,
-                    gold_18k=rate.gold_18k,
-                    gold_14k=rate.gold_14k,
-                    silver=rate.silver or 0,
-                    platinum=rate.platinum or 0,
-                    gold_usd_oz=rate.gold_usd_oz,
-                    silver_usd_oz=rate.silver_usd_oz,
-                    usd_inr=rate.usd_inr,
-                    mcx_gold_futures=getattr(rate, 'mcx_gold_futures', None),
-                    mcx_silver_futures=getattr(rate, 'mcx_silver_futures', None),
-                )
+                # Generate AI expert analysis using fresh scraped data
+                expert_analysis = await metal_service.generate_ai_expert_analysis(scraped_data, analysis)
 
-                # Generate AI expert analysis
-                expert_analysis = await metal_service.generate_ai_expert_analysis(rate_data, analysis)
-
-                # Format morning brief with AI analysis
-                brief = metal_service.format_morning_brief(rate, analysis, expert_analysis)
+                # Format morning brief with scraped data (has yesterday values)
+                brief = metal_service.format_morning_brief(rate, analysis, expert_analysis, scraped_data)
 
                 # Get subscribed users
                 users = await whatsapp_service.get_subscribed_users(db)

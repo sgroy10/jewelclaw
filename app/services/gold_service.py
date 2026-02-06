@@ -275,6 +275,13 @@ class MetalService:
                     logger.warning(f"Could not parse gold rates for {city}")
                     return None
 
+                # Log scraped values for debugging
+                logger.info(f"SCRAPED {city}: 24K=₹{gold_24k}, 22K=₹{gold_22k}, 18K=₹{gold_18k}")
+                logger.info(f"SCRAPED {city} YESTERDAY: 24K=₹{yesterday_24k}, 22K=₹{yesterday_22k}")
+                if yesterday_24k:
+                    change = gold_24k - yesterday_24k
+                    logger.info(f"DAILY CHANGE: ₹{change:+.0f} ({(change/yesterday_24k)*100:+.2f}%)")
+
                 # Calculate all karats from 24K
                 karats = self._calculate_all_karats(gold_24k)
 
@@ -764,7 +771,7 @@ Example good output:
 
         return "\n".join(lines)
 
-    def format_morning_brief(self, rates, analysis: MarketAnalysis, expert_analysis: str = None) -> str:
+    def format_morning_brief(self, rates, analysis: MarketAnalysis, expert_analysis: str = None, scraped_data: 'MetalRateData' = None) -> str:
         """Format the beautiful morning brief message with ALL data."""
         now = datetime.now()
 
@@ -783,9 +790,37 @@ Example good output:
         mcx_silver = getattr(rates, 'mcx_silver_futures', None)
         mcx_silver_expiry = getattr(rates, 'mcx_silver_futures_expiry', 'Mar')
 
-        # Calculate change symbols
+        # Calculate daily change - use scraped yesterday data if available
         change_24k = analysis.daily_change
-        cs = "↑" if change_24k >= 0 else "↓"
+        change_pct = analysis.daily_change_percent
+
+        # If no database change, try to get from scraped data
+        if change_24k == 0 and scraped_data:
+            yesterday_24k = getattr(scraped_data, 'yesterday_24k', None)
+            if yesterday_24k and yesterday_24k > 0:
+                change_24k = gold_24k - yesterday_24k
+                change_pct = (change_24k / yesterday_24k) * 100
+                logger.info(f"Using scraped change: ₹{change_24k:+.0f} ({change_pct:+.2f}%)")
+
+        # Determine change symbol
+        if change_24k > 0:
+            cs = "↑"
+        elif change_24k < 0:
+            cs = "↓"
+        else:
+            cs = "→"
+
+        # Format change text
+        if change_24k != 0:
+            change_text_24k = f"{cs}₹{abs(change_24k):,.0f}"
+            change_text_22k = f"{cs}₹{abs(change_24k * 0.916):,.0f}"
+            change_text_18k = f"{cs}₹{abs(change_24k * 0.75):,.0f}"
+            change_text_14k = f"{cs}₹{abs(change_24k * 0.585):,.0f}"
+        else:
+            change_text_24k = "→ No change"
+            change_text_22k = ""
+            change_text_18k = ""
+            change_text_14k = ""
 
         # Build the beautiful message
         lines = [
@@ -793,10 +828,10 @@ Example good output:
             f"📅 {now.strftime('%d %b %Y')} | {now.strftime('%I:%M %p')} IST",
             "",
             "💰 *GOLD* (₹/gram)",
-            f"24K: ₹{gold_24k:,.0f} {cs}₹{abs(change_24k):,.0f}",
-            f"22K: ₹{gold_22k:,.0f} {cs}₹{abs(change_24k * 0.916):,.0f}",
-            f"18K: ₹{gold_18k:,.0f} {cs}₹{abs(change_24k * 0.75):,.0f}",
-            f"14K: ₹{gold_14k:,.0f} {cs}₹{abs(change_24k * 0.585):,.0f}",
+            f"24K: ₹{gold_24k:,.0f} {change_text_24k}",
+            f"22K: ₹{gold_22k:,.0f} {change_text_22k}",
+            f"18K: ₹{gold_18k:,.0f} {change_text_18k}",
+            f"14K: ₹{gold_14k:,.0f} {change_text_14k}",
             "",
             "🪙 *SILVER*",
             f"₹{silver:,.0f}/gram | ₹{silver * 1000:,.0f}/kg",
@@ -829,8 +864,14 @@ Example good output:
             lines.append(f"_{analysis.recommendation_text}_")
         lines.append("")
 
-        # Add change summary
-        lines.append(f"📈 *Change:* Day {cs}{abs(analysis.daily_change_percent):.1f}% | Week {'+' if analysis.weekly_change_percent >= 0 else ''}{analysis.weekly_change_percent:.1f}% | Month {'+' if analysis.monthly_change_percent >= 0 else ''}{analysis.monthly_change_percent:.1f}%")
+        # Add change summary - use calculated change_pct if available
+        day_change_pct = change_pct if change_pct != 0 else analysis.daily_change_percent
+        day_symbol = cs if change_pct != 0 else ("↑" if analysis.daily_change_percent >= 0 else "↓")
+
+        week_symbol = "+" if analysis.weekly_change_percent >= 0 else ""
+        month_symbol = "+" if analysis.monthly_change_percent >= 0 else ""
+
+        lines.append(f"📈 *Change:* Day {day_symbol}{abs(day_change_pct):.1f}% | Week {week_symbol}{analysis.weekly_change_percent:.1f}% | Month {month_symbol}{analysis.monthly_change_percent:.1f}%")
         lines.append("")
         lines.append("_Reply 'gold' for detailed rates_")
 
