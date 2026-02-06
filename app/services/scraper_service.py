@@ -121,31 +121,37 @@ class ScraperService:
             "errors": []
         }
 
-        # Run scrapers
+        # Run scrapers with proper error isolation
         try:
             logger.info("Starting BlueStone scraper...")
             results["bluestone"] = await self.scrape_bluestone(db)
+            await db.commit()  # Commit successful scrape
         except Exception as e:
             logger.error(f"BlueStone scraper failed: {e}")
             results["errors"].append(f"BlueStone: {str(e)}")
+            await db.rollback()  # Rollback failed transaction
 
         await random_delay(2, 4)
 
         try:
             logger.info("Starting CaratLane scraper...")
             results["caratlane"] = await self.scrape_caratlane(db)
+            await db.commit()  # Commit successful scrape
         except Exception as e:
             logger.error(f"CaratLane scraper failed: {e}")
             results["errors"].append(f"CaratLane: {str(e)}")
+            await db.rollback()  # Rollback failed transaction
 
         await random_delay(2, 4)
 
         try:
             logger.info("Starting Tanishq scraper...")
             results["tanishq"] = await self.scrape_tanishq(db)
+            await db.commit()  # Commit successful scrape
         except Exception as e:
             logger.error(f"Tanishq scraper failed: {e}")
             results["errors"].append(f"Tanishq: {str(e)}")
+            await db.rollback()  # Rollback failed transaction
 
         results["total"] = results["bluestone"] + results["caratlane"] + results["tanishq"]
         logger.info(f"Scraping complete: {results['total']} designs found")

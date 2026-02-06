@@ -603,8 +603,8 @@ async def migrate_trend_scout():
 async def admin_scrape_designs(db: AsyncSession = Depends(get_db)):
     """Manually trigger design scraping."""
     try:
+        # scrape_all handles its own commits/rollbacks per scraper
         results = await scraper_service.scrape_all(db)
-        await db.commit()
         return {"status": "success", "results": results}
     except Exception as e:
         import traceback
