@@ -10,7 +10,7 @@ from fastapi.responses import PlainTextResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.database import init_db, close_db, get_db
+from app.database import init_db, close_db, get_db, reset_db
 from app.services.whatsapp_service import whatsapp_service
 from app.services.gold_service import metal_service
 from app.services.scheduler_service import scheduler_service
@@ -249,6 +249,19 @@ async def get_subscribers(db: AsyncSession = Depends(get_db)):
             for u in users
         ]
     }
+
+
+@app.post("/admin/reset-database")
+async def admin_reset_database():
+    """DROP ALL TABLES and recreate them. This will delete all data!"""
+    logger.warning("DATABASE RESET REQUESTED - Dropping all tables...")
+    success = await reset_db()
+    if success:
+        logger.info("Database reset successful")
+        return {"status": "success", "message": "All tables dropped and recreated"}
+    else:
+        logger.error("Database reset failed")
+        raise HTTPException(status_code=500, detail="Database reset failed")
 
 
 @app.get("/scheduler/status")

@@ -121,6 +121,21 @@ async def init_db():
         logger.warning("App will continue but database features may not work")
 
 
+async def reset_db():
+    """Drop all tables and recreate them. USE WITH CAUTION."""
+    global engine
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+            logger.info("All tables dropped")
+            await conn.run_sync(Base.metadata.create_all)
+            logger.info("All tables recreated")
+        return True
+    except Exception as e:
+        logger.error(f"Database reset failed: {e}")
+        return False
+
+
 async def close_db():
     """Close database connections."""
     global engine
