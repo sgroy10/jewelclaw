@@ -68,12 +68,15 @@ _pending_subscribe = {}  # phone_number -> True
 WELCOME_MESSAGE = """👋 *Welcome to JewelClaw!*
 Your AI-powered jewelry industry assistant.
 
+🚀 *First time?* Send: *join third-find*
+
 *Commands:*
-• *gold* - Get live gold rates with expert analysis
+• *gold* - Get live gold rates + expert analysis
 • *subscribe* - Get daily 9 AM morning brief
 • *unsubscribe* - Stop daily briefs
 • *help* - Show this menu
 
+🇮🇳 *Built for Indian Jewelers*
 _Developed by Sandeep Roy_"""
 
 
