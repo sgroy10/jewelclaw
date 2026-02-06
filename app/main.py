@@ -12,11 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import init_db, close_db, get_db, reset_db
 # Import models to ensure they're registered with Base.metadata
-from app.models import User, Conversation, MetalRate
+from app.models import User, Conversation, MetalRate, Design, UserDesignPreference, Lookbook
 from app.services.whatsapp_service import whatsapp_service
 from app.services.gold_service import metal_service
 from app.services.scheduler_service import scheduler_service
 from app.services.memory_service import memory_service
+from app.services.scraper_service import scraper_service
 
 # Configure logging
 logging.basicConfig(
@@ -74,9 +75,12 @@ Your AI-powered jewelry industry assistant.
 🚀 *First time?* Send: *join third-find*
 
 *Commands:*
-• *gold* - Get live gold rates + expert analysis
-• *subscribe* - Get daily 9 AM morning brief
-• *unsubscribe* - Stop daily briefs
+• *gold* - Live gold rates + expert analysis
+• *trends* - Trending jewelry designs
+• *bridal* - Bridal collection
+• *dailywear* - Lightweight designs
+• *lookbook* - Your saved designs
+• *subscribe* - Daily 9 AM brief
 • *help* - Show this menu
 
 🇮🇳 *Built for Indian Jewelers*
@@ -246,8 +250,168 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
     if command == "help":
         return WELCOME_MESSAGE
 
+    # ==========================================================================
+    # TREND SCOUT COMMANDS
+    # ==========================================================================
+
+    # 6. TRENDS → Show trending designs
+    if command in ["trends", "trending"]:
+        return await handle_trends_command(db, user)
+
+    # 7. BRIDAL → Show bridal designs
+    if command == "bridal":
+        return await handle_category_command(db, user, "bridal")
+
+    # 8. DAILYWEAR → Show dailywear designs
+    if command == "dailywear":
+        return await handle_category_command(db, user, "dailywear")
+
+    # 9. TEMPLE → Show temple jewelry
+    if command == "temple":
+        return await handle_category_command(db, user, "temple")
+
+    # 10. MENS → Show men's jewelry
+    if command == "mens":
+        return await handle_category_command(db, user, "mens")
+
+    # 11. LIKE/SAVE design
+    if command and command.startswith(("like", "save")):
+        return await handle_like_command(db, user, command)
+
+    # 12. SKIP design
+    if command and command.startswith("skip"):
+        return await handle_skip_command(db, user, command)
+
+    # 13. LOOKBOOK → Show saved designs
+    if command == "lookbook":
+        return await handle_lookbook_command(db, user)
+
     # Unknown command → Show welcome message
     return WELCOME_MESSAGE
+
+
+async def handle_trends_command(db: AsyncSession, user) -> str:
+    """Handle trends command - show trending designs."""
+    designs = await scraper_service.get_trending_designs(db, limit=5)
+
+    if not designs:
+        return """🔥 *Trend Scout*
+
+No designs found yet. Scraping in progress...
+
+_New designs will be available soon!_"""
+
+    lines = ["🔥 *Trending Designs Today*", ""]
+
+    for i, d in enumerate(designs, 1):
+        price_text = f"₹{d.price_range_min:,.0f}" if d.price_range_min else "Price N/A"
+        lines.append(f"*{i}. {d.title[:40]}*")
+        lines.append(f"   {d.category or 'General'} | {price_text}")
+        lines.append(f"   _Source: {d.source}_")
+        lines.append(f"   Reply 'like {d.id}' to save")
+        lines.append("")
+
+    lines.append("_Reply 'bridal', 'dailywear', 'temple' for categories_")
+
+    return "\n".join(lines)
+
+
+async def handle_category_command(db: AsyncSession, user, category: str) -> str:
+    """Handle category commands - show designs by category."""
+    designs = await scraper_service.get_trending_designs(db, category=category, limit=5)
+
+    category_titles = {
+        "bridal": "💍 Bridal Collection",
+        "dailywear": "✨ Dailywear Designs",
+        "temple": "🛕 Temple Jewelry",
+        "mens": "👔 Men's Collection",
+        "contemporary": "🎨 Contemporary Styles",
+    }
+
+    title = category_titles.get(category, f"📿 {category.title()} Designs")
+
+    if not designs:
+        return f"""*{title}*
+
+No {category} designs found yet.
+
+_Try 'trends' to see all trending designs_"""
+
+    lines = [f"*{title}*", ""]
+
+    for i, d in enumerate(designs, 1):
+        price_text = f"₹{d.price_range_min:,.0f}" if d.price_range_min else "Price N/A"
+        lines.append(f"*{i}. {d.title[:40]}*")
+        lines.append(f"   {price_text} | {d.source}")
+        lines.append(f"   Reply 'like {d.id}' to save")
+        lines.append("")
+
+    lines.append("_Reply 'lookbook' to see your saved designs_")
+
+    return "\n".join(lines)
+
+
+async def handle_like_command(db: AsyncSession, user, command: str) -> str:
+    """Handle like/save command."""
+    import re
+    match = re.search(r'(\d+)', command)
+    if not match:
+        return "Usage: like [design_id]\nExample: like 5"
+
+    design_id = int(match.group(1))
+
+    # Check if design exists
+    design = await db.get(Design, design_id)
+    if not design:
+        return f"Design #{design_id} not found. Try 'trends' to see available designs."
+
+    await scraper_service.record_preference(db, user.id, design_id, "liked")
+    await db.commit()
+
+    return f"""✅ *Saved!*
+
+{design.title[:50]}
+
+_Reply 'lookbook' to see all saved designs_"""
+
+
+async def handle_skip_command(db: AsyncSession, user, command: str) -> str:
+    """Handle skip command."""
+    import re
+    match = re.search(r'(\d+)', command)
+    if not match:
+        return "Usage: skip [design_id]\nExample: skip 5"
+
+    design_id = int(match.group(1))
+
+    await scraper_service.record_preference(db, user.id, design_id, "skipped")
+    await db.commit()
+
+    return "⏭️ Skipped. Reply 'trends' for more designs."
+
+
+async def handle_lookbook_command(db: AsyncSession, user) -> str:
+    """Handle lookbook command - show saved designs."""
+    designs = await scraper_service.get_user_saved_designs(db, user.id)
+
+    if not designs:
+        return """📚 *Your Lookbook*
+
+No saved designs yet.
+
+_Browse designs with 'trends', 'bridal', or 'dailywear'
+Then reply 'like [id]' to save_"""
+
+    lines = ["📚 *Your Saved Designs*", ""]
+
+    for i, d in enumerate(designs[:10], 1):
+        price_text = f"₹{d.price_range_min:,.0f}" if d.price_range_min else ""
+        lines.append(f"{i}. {d.title[:35]} {price_text}")
+
+    lines.append("")
+    lines.append(f"_Total: {len(designs)} designs saved_")
+
+    return "\n".join(lines)
 
 
 # API Endpoints
@@ -360,6 +524,88 @@ async def migrate_phase_1():
 
         return {"status": "success", "message": "Phase 1: Conversation intelligence columns added"}
 
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
+
+
+@app.post("/admin/migrate-trend-scout")
+async def migrate_trend_scout():
+    """Create Trend Scout tables (designs, user_design_preferences, lookbooks)."""
+    from sqlalchemy import text
+    from app.database import engine
+
+    try:
+        async with engine.begin() as conn:
+            # Create designs table
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS designs (
+                    id SERIAL PRIMARY KEY,
+                    source VARCHAR(50) NOT NULL,
+                    source_url VARCHAR(500),
+                    image_url VARCHAR(500),
+                    title VARCHAR(200),
+                    description TEXT,
+                    category VARCHAR(50),
+                    metal_type VARCHAR(30),
+                    karat VARCHAR(10),
+                    price_range_min FLOAT,
+                    price_range_max FLOAT,
+                    style_tags JSON DEFAULT '[]',
+                    trending_score FLOAT DEFAULT 0,
+                    scraped_at TIMESTAMP DEFAULT NOW(),
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """))
+
+            # Create indexes
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_design_category_score ON designs(category, trending_score)
+            """))
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_design_source ON designs(source)
+            """))
+
+            # Create user_design_preferences table
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS user_design_preferences (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    design_id INTEGER REFERENCES designs(id) ON DELETE CASCADE,
+                    action VARCHAR(20) NOT NULL,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """))
+
+            # Create lookbooks table
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS lookbooks (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    name VARCHAR(100) NOT NULL,
+                    design_ids JSON DEFAULT '[]',
+                    pdf_url VARCHAR(500),
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """))
+
+            logger.info("Trend Scout migration complete")
+
+        return {"status": "success", "message": "Trend Scout tables created"}
+
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
+
+
+@app.post("/admin/scrape-designs")
+async def admin_scrape_designs(db: AsyncSession = Depends(get_db)):
+    """Manually trigger design scraping."""
+    try:
+        results = await scraper_service.scrape_all(db)
+        await db.commit()
+        return {"status": "success", "results": results}
     except Exception as e:
         import traceback
         return {"status": "error", "error": str(e), "detail": traceback.format_exc()}

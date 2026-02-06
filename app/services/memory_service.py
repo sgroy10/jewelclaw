@@ -43,6 +43,31 @@ INTENT_PATTERNS = {
     "thanks": [
         r"\bthanks?\b", r"\bthank\s*you\b", r"\bdhanyawad\b"
     ],
+    # Trend Scout intents
+    "trends": [
+        r"\btrends?\b", r"\btrending\b", r"\bnew\s*designs?\b", r"\bwhat.s\s*hot\b"
+    ],
+    "bridal": [
+        r"\bbridal\b", r"\bwedding\b", r"\bengagement\b", r"\bmangalsutra\b"
+    ],
+    "dailywear": [
+        r"\bdailywear\b", r"\bdaily\s*wear\b", r"\blightweight\b", r"\boffice\s*wear\b"
+    ],
+    "temple": [
+        r"\btemple\b", r"\btraditional\b", r"\bantique\b"
+    ],
+    "mens": [
+        r"\bmens?\b", r"\bmen.s\b", r"\bgents?\b", r"\bkada\b"
+    ],
+    "like_design": [
+        r"\blike\s*(\d+)\b", r"\blove\s*(\d+)\b", r"\bsave\s*(\d+)\b"
+    ],
+    "skip_design": [
+        r"\bskip\s*(\d+)\b", r"\bpass\s*(\d+)\b", r"\bnext\s*(\d+)\b"
+    ],
+    "lookbook": [
+        r"\blookbook\b", r"\bsaved\b", r"\bmy\s*designs?\b", r"\bfavorites?\b"
+    ],
 }
 
 # Entity extraction patterns

@@ -12,6 +12,7 @@ from app.config import settings
 from app.database import get_db_session
 from app.services.gold_service import metal_service
 from app.services.whatsapp_service import whatsapp_service
+from app.services.scraper_service import scraper_service
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,19 @@ class SchedulerService:
             ),
             id="rate_scraper",
             name="Scrape Metal Rates",
+            replace_existing=True
+        )
+
+        # Trend Scout: Design scraping at 6 AM IST daily
+        self.scheduler.add_job(
+            self.scrape_designs,
+            CronTrigger(
+                hour=6,
+                minute=0,
+                timezone=IST
+            ),
+            id="design_scraper",
+            name="Scrape Jewelry Designs",
             replace_existing=True
         )
 
@@ -109,6 +123,9 @@ class SchedulerService:
                     logger.info("No subscribers to send morning brief")
                     return
 
+                # Get new designs count for Trend Scout teaser
+                new_designs_count = await scraper_service.get_new_designs_count(db, hours=24)
+
                 # Send personalized message to each user
                 success_count = 0
                 for user in users:
@@ -123,7 +140,13 @@ class SchedulerService:
                             skip_header=True
                         )
 
-                        personalized_brief = greeting + brief_body
+                        # Add Trend Scout teaser if there are new designs
+                        if new_designs_count > 0:
+                            trend_teaser = f"\n\n🔥 *{new_designs_count} new designs* added today!\nReply 'trends' to explore."
+                        else:
+                            trend_teaser = ""
+
+                        personalized_brief = greeting + brief_body + trend_teaser
 
                         phone = f"whatsapp:{user.phone_number}"
                         sent = await whatsapp_service.send_message(phone, personalized_brief)
@@ -166,6 +189,30 @@ class SchedulerService:
 
         except Exception as e:
             logger.error(f"Error in rate scraping job: {e}")
+
+    async def scrape_designs(self):
+        """Scrape jewelry designs from competitors (6 AM daily)."""
+        logger.info("=" * 50)
+        logger.info("STARTING TREND SCOUT - DESIGN SCRAPING")
+        logger.info("=" * 50)
+
+        try:
+            async with get_db_session() as db:
+                results = await scraper_service.scrape_all(db)
+                await db.commit()
+
+                logger.info(f"Design scraping complete:")
+                logger.info(f"  BlueStone: {results['bluestone']} designs")
+                logger.info(f"  CaratLane: {results['caratlane']} designs")
+                logger.info(f"  Pinterest: {results['pinterest']} designs")
+                logger.info(f"  TOTAL: {results['total']} new designs")
+
+                if results.get('errors'):
+                    for error in results['errors']:
+                        logger.warning(f"  Error: {error}")
+
+        except Exception as e:
+            logger.error(f"Error in design scraping job: {e}")
 
     async def trigger_morning_brief_now(self):
         """Manually trigger morning brief."""

@@ -53,6 +53,8 @@ class User(Base):
 
     # Relationships
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
+    design_preferences = relationship("UserDesignPreference", back_populates="user", cascade="all, delete-orphan")
+    lookbooks = relationship("Lookbook", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User {self.phone_number}>"
@@ -135,3 +137,90 @@ class MetalRate(Base):
 
 # Keep old name for backward compatibility
 GoldRate = MetalRate
+
+
+# =============================================================================
+# TREND SCOUT MODELS
+# =============================================================================
+
+class Design(Base):
+    """Jewelry designs scraped from competitors and trend sources."""
+
+    __tablename__ = "designs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Source info
+    source = Column(String(50), nullable=False, index=True)  # bluestone, caratlane, tanishq, pinterest
+    source_url = Column(String(500), nullable=True)
+    image_url = Column(String(500), nullable=True)
+
+    # Design details
+    title = Column(String(200), nullable=True)
+    description = Column(Text, nullable=True)
+    category = Column(String(50), nullable=True, index=True)  # bridal, dailywear, mens, kids, temple, contemporary
+    metal_type = Column(String(30), nullable=True)  # gold, silver, platinum, diamond
+    karat = Column(String(10), nullable=True)  # 22K, 18K, etc.
+
+    # Pricing
+    price_range_min = Column(Float, nullable=True)
+    price_range_max = Column(Float, nullable=True)
+
+    # Tags and scoring
+    style_tags = Column(JSON, default=[])  # ["minimal", "traditional", "kundan", "polki"]
+    trending_score = Column(Float, default=0)  # 0-100, calculated from likes/views
+
+    # Timestamps
+    scraped_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now())
+
+    # Relationships
+    user_preferences = relationship("UserDesignPreference", back_populates="design", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_design_category_score", "category", "trending_score"),
+        Index("idx_design_source_scraped", "source", "scraped_at"),
+    )
+
+    def __repr__(self):
+        return f"<Design {self.id} - {self.title[:30] if self.title else 'Untitled'}>"
+
+
+class UserDesignPreference(Base):
+    """Track user interactions with designs (like/skip/save)."""
+
+    __tablename__ = "user_design_preferences"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    design_id = Column(Integer, ForeignKey("designs.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    action = Column(String(20), nullable=False)  # liked, skipped, saved
+    created_at = Column(DateTime, server_default=func.now())
+
+    # Relationships
+    user = relationship("User", back_populates="design_preferences")
+    design = relationship("Design", back_populates="user_preferences")
+
+    __table_args__ = (
+        Index("idx_user_design_action", "user_id", "design_id", "action"),
+    )
+
+
+class Lookbook(Base):
+    """User-curated collections of designs for PDF export."""
+
+    __tablename__ = "lookbooks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    name = Column(String(100), nullable=False)
+    design_ids = Column(JSON, default=[])  # [1, 5, 12, 34, ...]
+    pdf_url = Column(String(500), nullable=True)
+
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    user = relationship("User", back_populates="lookbooks")

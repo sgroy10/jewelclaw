@@ -40,6 +40,23 @@ COMMANDS = {
     # Help
     "help": "help",
     "menu": "help",
+
+    # Trend Scout commands
+    "trends": "trends",
+    "trending": "trending",
+    "bridal": "bridal",
+    "wedding": "bridal",
+    "dailywear": "dailywear",
+    "daily wear": "dailywear",
+    "lightweight": "dailywear",
+    "temple": "temple",
+    "traditional": "temple",
+    "mens": "mens",
+    "men": "mens",
+    "gents": "mens",
+    "lookbook": "lookbook",
+    "saved": "lookbook",
+    "favorites": "lookbook",
 }
 
 
