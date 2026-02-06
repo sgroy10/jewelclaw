@@ -256,14 +256,31 @@ async def get_subscribers(db: AsyncSession = Depends(get_db)):
 @app.post("/admin/reset-database")
 async def admin_reset_database():
     """DROP ALL TABLES and recreate them. This will delete all data!"""
+    from sqlalchemy import text
+    from app.database import engine
+
     logger.warning("DATABASE RESET REQUESTED - Dropping all tables...")
-    success = await reset_db()
-    if success:
-        logger.info("Database reset successful")
-        return {"status": "success", "message": "All tables dropped and recreated"}
-    else:
-        logger.error("Database reset failed")
-        raise HTTPException(status_code=500, detail="Database reset failed")
+
+    try:
+        async with engine.begin() as conn:
+            # Drop all tables with CASCADE
+            await conn.execute(text("DROP TABLE IF EXISTS conversations CASCADE"))
+            await conn.execute(text("DROP TABLE IF EXISTS metal_rates CASCADE"))
+            await conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
+            await conn.execute(text("DROP TYPE IF EXISTS languagepreference CASCADE"))
+            logger.info("Tables dropped")
+
+        # Recreate
+        await init_db()
+        logger.info("Tables recreated")
+
+        return {"status": "success", "message": "Database reset complete"}
+
+    except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        logger.error(f"Reset failed: {error_detail}")
+        return {"status": "error", "error": str(e), "detail": error_detail}
 
 
 @app.get("/scheduler/status")
