@@ -70,8 +70,8 @@ class WhatsAppService:
         )
         self.from_number = settings.twilio_whatsapp_number
 
-    async def send_message(self, to_number: str, message: str) -> bool:
-        """Send a WhatsApp message."""
+    async def send_message(self, to_number: str, message: str, media_url: str = None) -> bool:
+        """Send a WhatsApp message, optionally with an image."""
         if not to_number.startswith("whatsapp:"):
             to_number = f"whatsapp:{to_number}"
 
@@ -79,18 +79,35 @@ class WhatsAppService:
             # Split long messages
             if len(message) > 1500:
                 chunks = self._split_message(message)
-                for chunk in chunks:
+                for i, chunk in enumerate(chunks):
+                    # Only attach media to first chunk
+                    if i == 0 and media_url:
+                        self.client.messages.create(
+                            body=chunk,
+                            from_=self.from_number,
+                            to=to_number,
+                            media_url=[media_url]
+                        )
+                    else:
+                        self.client.messages.create(
+                            body=chunk,
+                            from_=self.from_number,
+                            to=to_number
+                        )
+            else:
+                if media_url:
                     self.client.messages.create(
-                        body=chunk,
+                        body=message,
+                        from_=self.from_number,
+                        to=to_number,
+                        media_url=[media_url]
+                    )
+                else:
+                    self.client.messages.create(
+                        body=message,
                         from_=self.from_number,
                         to=to_number
                     )
-            else:
-                self.client.messages.create(
-                    body=message,
-                    from_=self.from_number,
-                    to=to_number
-                )
 
             logger.info(f"Message sent to {to_number}")
             return True

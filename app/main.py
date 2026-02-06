@@ -256,23 +256,23 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
 
     # 6. TRENDS → Show trending designs
     if command in ["trends", "trending"]:
-        return await handle_trends_command(db, user)
+        return await handle_trends_command(db, user, phone_number)
 
     # 7. BRIDAL → Show bridal designs
     if command == "bridal":
-        return await handle_category_command(db, user, "bridal")
+        return await handle_category_command(db, user, "bridal", phone_number)
 
     # 8. DAILYWEAR → Show dailywear designs
     if command == "dailywear":
-        return await handle_category_command(db, user, "dailywear")
+        return await handle_category_command(db, user, "dailywear", phone_number)
 
     # 9. TEMPLE → Show temple jewelry
     if command == "temple":
-        return await handle_category_command(db, user, "temple")
+        return await handle_category_command(db, user, "temple", phone_number)
 
     # 10. MENS → Show men's jewelry
     if command == "mens":
-        return await handle_category_command(db, user, "mens")
+        return await handle_category_command(db, user, "mens", phone_number)
 
     # 11. LIKE/SAVE design
     if command and command.startswith(("like", "save")):
@@ -290,8 +290,8 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
     return WELCOME_MESSAGE
 
 
-async def handle_trends_command(db: AsyncSession, user) -> str:
-    """Handle trends command - show trending designs."""
+async def handle_trends_command(db: AsyncSession, user, phone_number: str) -> str:
+    """Handle trends command - show trending designs with images."""
     designs = await scraper_service.get_trending_designs(db, limit=5)
 
     if not designs:
@@ -301,23 +301,26 @@ No designs found yet. Scraping in progress...
 
 _New designs will be available soon!_"""
 
-    lines = ["🔥 *Trending Designs Today*", ""]
+    # Send header
+    await whatsapp_service.send_message(phone_number, "🔥 *Trending Designs Today*")
 
+    # Send each design with its image
     for i, d in enumerate(designs, 1):
         price_text = f"₹{d.price_range_min:,.0f}" if d.price_range_min else "Price N/A"
-        lines.append(f"*{i}. {d.title[:40]}*")
-        lines.append(f"   {d.category or 'General'} | {price_text}")
-        lines.append(f"   _Source: {d.source}_")
-        lines.append(f"   Reply 'like {d.id}' to save")
-        lines.append("")
+        caption = f"*{i}. {d.title[:50]}*\n{d.category or 'General'} | {price_text}\n_Source: {d.source}_\n\nReply 'like {d.id}' to save"
 
-    lines.append("_Reply 'bridal', 'dailywear', 'temple' for categories_")
+        # Send with image if available
+        if d.image_url:
+            await whatsapp_service.send_message(phone_number, caption, media_url=d.image_url)
+        else:
+            await whatsapp_service.send_message(phone_number, caption)
 
-    return "\n".join(lines)
+    # Return final instruction (this will be sent as the last message)
+    return "_Reply 'bridal', 'dailywear', 'temple' for categories_"
 
 
-async def handle_category_command(db: AsyncSession, user, category: str) -> str:
-    """Handle category commands - show designs by category."""
+async def handle_category_command(db: AsyncSession, user, category: str, phone_number: str) -> str:
+    """Handle category commands - show designs by category with images."""
     designs = await scraper_service.get_trending_designs(db, category=category, limit=5)
 
     category_titles = {
@@ -337,18 +340,20 @@ No {category} designs found yet.
 
 _Try 'trends' to see all trending designs_"""
 
-    lines = [f"*{title}*", ""]
+    # Send header
+    await whatsapp_service.send_message(phone_number, f"*{title}*")
 
+    # Send each design with its image
     for i, d in enumerate(designs, 1):
         price_text = f"₹{d.price_range_min:,.0f}" if d.price_range_min else "Price N/A"
-        lines.append(f"*{i}. {d.title[:40]}*")
-        lines.append(f"   {price_text} | {d.source}")
-        lines.append(f"   Reply 'like {d.id}' to save")
-        lines.append("")
+        caption = f"*{i}. {d.title[:50]}*\n{price_text} | {d.source}\n\nReply 'like {d.id}' to save"
 
-    lines.append("_Reply 'lookbook' to see your saved designs_")
+        if d.image_url:
+            await whatsapp_service.send_message(phone_number, caption, media_url=d.image_url)
+        else:
+            await whatsapp_service.send_message(phone_number, caption)
 
-    return "\n".join(lines)
+    return "_Reply 'lookbook' to see your saved designs_"
 
 
 async def handle_like_command(db: AsyncSession, user, command: str) -> str:
