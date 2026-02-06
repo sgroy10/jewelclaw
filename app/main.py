@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import init_db, close_db, get_db, reset_db
+# Import models to ensure they're registered with Base.metadata
+from app.models import User, Conversation, MetalRate
 from app.services.whatsapp_service import whatsapp_service
 from app.services.gold_service import metal_service
 from app.services.scheduler_service import scheduler_service

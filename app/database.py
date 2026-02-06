@@ -124,15 +124,26 @@ async def init_db():
 async def reset_db():
     """Drop all tables and recreate them. USE WITH CAUTION."""
     global engine
+    from sqlalchemy import text
+
     try:
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
+            # Drop tables using raw SQL with CASCADE for PostgreSQL
+            await conn.execute(text("DROP TABLE IF EXISTS conversations CASCADE"))
+            await conn.execute(text("DROP TABLE IF EXISTS metal_rates CASCADE"))
+            await conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
+            # Drop enum type if exists (PostgreSQL specific)
+            await conn.execute(text("DROP TYPE IF EXISTS languagepreference CASCADE"))
             logger.info("All tables dropped")
+
+            # Recreate tables
             await conn.run_sync(Base.metadata.create_all)
             logger.info("All tables recreated")
         return True
     except Exception as e:
         logger.error(f"Database reset failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return False
 
 
