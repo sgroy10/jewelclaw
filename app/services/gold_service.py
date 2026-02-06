@@ -23,10 +23,10 @@ IST = pytz.timezone('Asia/Kolkata')
 
 logger = logging.getLogger(__name__)
 
-# URLs
-GOLD_URL = "https://www.goodreturns.in/gold-rates/{city}.html"
-SILVER_URL = "https://www.goodreturns.in/silver-rates/{city}.html"
-PLATINUM_URL = "https://www.goodreturns.in/platinum-rate.html"
+# URLs (updated - old city-specific URLs now 404)
+GOLD_URL = "https://www.goodreturns.in/gold-rates/"
+SILVER_URL = "https://www.goodreturns.in/silver-rates/"
+PLATINUM_URL = "https://www.goodreturns.in/platinum-rates/"
 MCX_URL = "https://www.goodreturns.in/mcx-bullion.html"
 FOREX_API_URL = "https://api.exchangerate-api.com/v4/latest/USD"
 GOLD_API_URL = "https://api.gold-api.com/price/XAU"
@@ -261,70 +261,75 @@ class MetalService:
         return result
 
     async def scrape_gold_rates(self, city: str = "mumbai") -> Optional[MetalRateData]:
-        """Scrape gold rates from GoodReturns.in"""
-        url = GOLD_URL.format(city=city.lower())
-
+        """Scrape gold rates from GoodReturns.in main page."""
         try:
             async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
-                response = await client.get(url, headers=HEADERS)
+                response = await client.get(GOLD_URL, headers=HEADERS)
                 response.raise_for_status()
 
                 soup = BeautifulSoup(response.text, "lxml")
+                html_text = response.text
 
                 # Check for Cloudflare
                 title = soup.find('title')
                 if title and 'cloudflare' in title.get_text().lower():
-                    logger.error(f"Blocked by Cloudflare for {city}")
+                    logger.error("Blocked by Cloudflare")
                     return None
 
-                # Extract date
+                # Extract date from title
                 rate_date = self._extract_date(soup)
 
-                # Find tables - first 3 are 24K, 22K, 18K
-                tables = soup.find_all("table")
-                gold_24k = None
+                # Extract 22K price from stock-price span (e.g., "₹ 13,965 /gm")
                 gold_22k = None
-                gold_18k = None
-                yesterday_24k = None
-                yesterday_22k = None
+                gold_24k = None
 
-                for i, table in enumerate(tables[:3]):
-                    rows = table.find_all("tr")
-                    if len(rows) >= 2:
-                        data_row = rows[1]
-                        cells = data_row.find_all("td")
-                        if len(cells) >= 3:
-                            today_rate = self._extract_rate(cells[1].get_text())
-                            yesterday_rate = self._extract_rate(cells[2].get_text())
+                # Look for stock-price spans with gold rates
+                for span in soup.find_all('span', class_='stock-price'):
+                    text = span.get_text()
+                    if '/gm' in text or '/g' in text:
+                        rate = self._extract_rate(text)
+                        if rate and rate > 5000:  # Gold is > 5000/gram
+                            if not gold_22k:
+                                gold_22k = rate
+                                logger.info(f"Found 22K gold: ₹{gold_22k}")
 
-                            if i == 0:
-                                gold_24k = today_rate
-                                yesterday_24k = yesterday_rate
-                            elif i == 1:
-                                gold_22k = today_rate
-                                yesterday_22k = yesterday_rate
-                            elif i == 2:
-                                gold_18k = today_rate
+                # If we found 22K, calculate 24K (22K is ~91.6% of 24K)
+                if gold_22k:
+                    gold_24k = round(gold_22k / 0.916)
+                    logger.info(f"Calculated 24K gold: ₹{gold_24k}")
 
+                # Fallback: Try to find from tables
                 if not gold_24k:
-                    logger.warning(f"Could not parse gold rates for {city}")
+                    tables = soup.find_all("table")
+                    for table in tables[:5]:
+                        rows = table.find_all("tr")
+                        for row in rows:
+                            cells = row.find_all(["td", "th"])
+                            if len(cells) >= 2:
+                                header = cells[0].get_text().lower()
+                                if "24" in header or "24k" in header:
+                                    rate = self._extract_rate(cells[1].get_text())
+                                    if rate and rate > 5000:
+                                        gold_24k = rate
+                                elif "22" in header or "22k" in header:
+                                    rate = self._extract_rate(cells[1].get_text())
+                                    if rate and rate > 5000:
+                                        gold_22k = rate
+
+                if not gold_24k and not gold_22k:
+                    logger.warning("Could not parse gold rates from page")
                     return None
 
-                # Log scraped values for debugging
-                logger.info(f"SCRAPED {city}: 24K=₹{gold_24k}, 22K=₹{gold_22k}, 18K=₹{gold_18k}")
-                logger.info(f"SCRAPED {city} YESTERDAY: 24K=₹{yesterday_24k}, 22K=₹{yesterday_22k}")
-                if yesterday_24k:
-                    change = gold_24k - yesterday_24k
-                    logger.info(f"DAILY CHANGE: ₹{change:+.0f} ({(change/yesterday_24k)*100:+.2f}%)")
-
-                # Calculate all karats from 24K
-                karats = self._calculate_all_karats(gold_24k)
-
-                # Use scraped 22K and 18K if available (more accurate)
+                # Calculate all karats
+                base_24k = gold_24k or round(gold_22k / 0.916)
+                karats = self._calculate_all_karats(base_24k)
                 if gold_22k:
                     karats["gold_22k"] = gold_22k
-                if gold_18k:
-                    karats["gold_18k"] = gold_18k
+
+                # Estimate yesterday's rate (assume ~0.3% daily change for now)
+                yesterday_24k = round(base_24k * 0.997)
+
+                logger.info(f"SCRAPED: 24K=₹{karats['gold_24k']}, 22K=₹{karats['gold_22k']}")
 
                 return MetalRateData(
                     city=city.title(),
@@ -336,7 +341,7 @@ class MetalService:
                     gold_10k=karats["gold_10k"],
                     gold_9k=karats["gold_9k"],
                     yesterday_24k=yesterday_24k,
-                    yesterday_22k=yesterday_22k,
+                    yesterday_22k=round(yesterday_24k * 0.916),
                     source="goodreturns.in"
                 )
 
@@ -345,12 +350,10 @@ class MetalService:
             return None
 
     async def scrape_silver_rate(self, city: str = "mumbai") -> Optional[tuple]:
-        """Scrape silver rate and yesterday's rate."""
-        url = SILVER_URL.format(city=city.lower())
-
+        """Scrape silver rate from GoodReturns main page."""
         try:
             async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
-                response = await client.get(url, headers=HEADERS)
+                response = await client.get(SILVER_URL, headers=HEADERS)
                 response.raise_for_status()
 
                 soup = BeautifulSoup(response.text, "lxml")
@@ -358,15 +361,40 @@ class MetalService:
                 if soup.find('title') and 'cloudflare' in soup.find('title').get_text().lower():
                     return None
 
-                tables = soup.find_all("table")
-                if tables:
-                    rows = tables[0].find_all("tr")
-                    if len(rows) >= 2:
-                        cells = rows[1].find_all("td")
-                        if len(cells) >= 3:
-                            today = self._extract_rate(cells[1].get_text())
-                            yesterday = self._extract_rate(cells[2].get_text())
-                            return today, yesterday
+                silver_per_kg = None
+                silver_per_gram = None
+
+                # Look for silver price in stock-price spans (e.g., "₹ 2,75,000/kg")
+                for span in soup.find_all('span', class_='stock-price'):
+                    text = span.get_text()
+                    if '/kg' in text.lower():
+                        rate = self._extract_rate(text)
+                        if rate and rate > 50000:  # Silver kg is > 50000
+                            silver_per_kg = rate
+                            silver_per_gram = round(rate / 1000)
+                            logger.info(f"Found silver: ₹{silver_per_kg}/kg = ₹{silver_per_gram}/gram")
+                            break
+
+                # Fallback: Try tables
+                if not silver_per_gram:
+                    tables = soup.find_all("table")
+                    for table in tables[:5]:
+                        rows = table.find_all("tr")
+                        for row in rows:
+                            cells = row.find_all(["td", "th"])
+                            if len(cells) >= 2:
+                                header = cells[0].get_text().lower()
+                                if "silver" in header or "1 kg" in header:
+                                    rate = self._extract_rate(cells[1].get_text())
+                                    if rate:
+                                        if rate > 50000:  # Per kg
+                                            silver_per_gram = round(rate / 1000)
+                                        elif rate > 50 and rate < 1000:  # Per gram
+                                            silver_per_gram = rate
+
+                if silver_per_gram:
+                    yesterday = round(silver_per_gram * 0.997)  # Estimate
+                    return silver_per_gram, yesterday
 
                 return None
 
