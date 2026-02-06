@@ -650,6 +650,31 @@ async def fix_designs_schema():
         return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
 
 
+@app.post("/admin/boost-images")
+async def boost_images():
+    """Boost trending_score for designs with images so they show first."""
+    from sqlalchemy import text
+    from app.database import engine
+
+    try:
+        async with engine.begin() as conn:
+            # Boost BlueStone (has real images) to 60
+            await conn.execute(text("""
+                UPDATE designs SET trending_score = 60 WHERE source = 'bluestone' AND image_url IS NOT NULL
+            """))
+            # Lower samples without images to 40
+            await conn.execute(text("""
+                UPDATE designs SET trending_score = 40 WHERE image_url IS NULL
+            """))
+            logger.info("Boosted designs with images")
+
+        return {"status": "success", "message": "Designs with images boosted to top"}
+
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
+
+
 @app.post("/admin/scrape-designs")
 async def admin_scrape_designs(db: AsyncSession = Depends(get_db)):
     """Manually trigger design scraping."""
