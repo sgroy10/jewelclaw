@@ -1,8 +1,2 @@
 [phases.setup]
-nixPkgs = ["python311", "postgresql"]
-
-[phases.install]
-cmds = ["pip install --upgrade pip", "pip install -r requirements.txt"]
-
-[start]
-cmd = "sh -c 'python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}'"
+nixPkgs = ["zlib", "libjpeg", "freetype"]
