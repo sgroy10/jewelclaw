@@ -4,7 +4,7 @@ Image Service - Upload and manage images via Cloudinary.
 Handles:
 - Downloading images from source URLs
 - Uploading to Cloudinary
-- Returning permanent URLs that work with Twilio
+- Returning permanent URLs that work with Twilio (JPG format)
 """
 
 import logging
@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 try:
     import cloudinary
     import cloudinary.uploader
+    import cloudinary.utils
     CLOUDINARY_AVAILABLE = True
 except ImportError:
     CLOUDINARY_AVAILABLE = False
@@ -29,6 +30,7 @@ class ImageService:
 
     def __init__(self):
         self.configured = False
+        self.cloud_name = ""
 
     def configure(self, cloud_name: str, api_key: str, api_secret: str):
         """Configure Cloudinary credentials."""
@@ -41,6 +43,7 @@ class ImageService:
             api_key=api_key,
             api_secret=api_secret
         )
+        self.cloud_name = cloud_name
         self.configured = True
         logger.info(f"Cloudinary configured for cloud: {cloud_name}")
 
@@ -49,10 +52,15 @@ class ImageService:
         hash_input = f"{source}:{url}"
         return f"jewelclaw/{source}/{hashlib.md5(hash_input.encode()).hexdigest()[:16]}"
 
+    def _build_jpg_url(self, public_id: str) -> str:
+        """Build Cloudinary URL with JPG format transformation."""
+        # Format: https://res.cloudinary.com/{cloud}/image/upload/f_jpg,w_500,h_500,c_limit,q_auto/{public_id}
+        return f"https://res.cloudinary.com/{self.cloud_name}/image/upload/f_jpg,w_500,h_500,c_limit,q_auto/{public_id}"
+
     async def upload_from_url(self, image_url: str, source: str = "unknown") -> Optional[str]:
         """
         Upload an image from URL to Cloudinary.
-        Returns the Cloudinary URL or None if failed.
+        Returns the Cloudinary URL with JPG format for Twilio compatibility.
         """
         if not self.configured:
             logger.warning("Cloudinary not configured, returning original URL")
@@ -64,25 +72,27 @@ class ImageService:
         try:
             public_id = self._generate_public_id(source, image_url)
 
-            # Upload to Cloudinary
+            # Upload to Cloudinary (without transformation - we'll apply it in URL)
             result = cloudinary.uploader.upload(
                 image_url,
                 public_id=public_id,
                 overwrite=False,  # Don't re-upload if exists
                 resource_type="image",
-                folder="jewelclaw",
-                transformation=[
-                    {'width': 500, 'height': 500, 'crop': 'limit'},  # Resize for WhatsApp
-                    {'quality': 'auto:good'},
-                    {'format': 'jpg'}  # Convert to JPG for better compatibility
-                ]
             )
 
-            cloudinary_url = result.get('secure_url')
-            logger.info(f"Uploaded to Cloudinary: {cloudinary_url}")
-            return cloudinary_url
+            # Get the public_id from result and build URL with JPG transformation
+            uploaded_public_id = result.get('public_id')
+            jpg_url = self._build_jpg_url(uploaded_public_id)
+
+            logger.info(f"Uploaded to Cloudinary: {jpg_url}")
+            return jpg_url
 
         except Exception as e:
+            # Check if it's "already exists" error - still return the transformed URL
+            if "already exists" in str(e).lower():
+                logger.info(f"Image already exists in Cloudinary")
+                return self._build_jpg_url(public_id)
+
             logger.error(f"Cloudinary upload failed: {e}")
             return image_url  # Return original URL as fallback
 
@@ -120,17 +130,15 @@ class ImageService:
                 public_id=public_id,
                 overwrite=False,
                 resource_type="image",
-                folder="jewelclaw",
-                transformation=[
-                    {'width': 500, 'height': 500, 'crop': 'limit'},
-                    {'quality': 'auto:good'},
-                    {'format': 'jpg'}
-                ]
             )
 
-            return result.get('secure_url')
+            # Build URL with JPG transformation
+            uploaded_public_id = result.get('public_id')
+            return self._build_jpg_url(uploaded_public_id)
 
         except Exception as e:
+            if "already exists" in str(e).lower():
+                return self._build_jpg_url(public_id)
             logger.error(f"Download and upload failed: {e}")
             return image_url
 
