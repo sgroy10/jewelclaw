@@ -2,9 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install minimal dependencies for the app
+# Install dependencies for the app and Pillow/reportlab
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    libjpeg-dev \
+    zlib1g-dev \
+    libfreetype6-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
