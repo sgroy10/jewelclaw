@@ -41,6 +41,12 @@ COMMANDS = {
     "help": "help",
     "menu": "help",
 
+    # Setup/Onboarding
+    "setup": "setup",
+    "onboarding": "setup",
+    "start": "setup",
+    "join": "setup",
+
     # Trend Scout commands
     "trends": "trends",
     "trending": "trending",

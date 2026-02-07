@@ -76,41 +76,36 @@ Your AI-powered jewelry industry assistant.
 • *gold* - Live gold rates + expert analysis
 • *trends* - Trending jewelry designs
 • *subscribe* - Daily 9 AM morning brief
-• *help* - Show all commands
+• *setup* - How to join JewelClaw
+• *help* - Show this menu
 
 🇮🇳 *Built for Indian Jewelers*
 
 Type *gold* to get started!"""
 
 
-# Onboarding instructions for sharing with new users
-ONBOARDING_GUIDE = """
-━━━━━━━━━━━━━━━━━━━━━━━━
-🏆 *JewelClaw Setup Guide*
-━━━━━━━━━━━━━━━━━━━━━━━━
+# Onboarding instructions - shown when user types "setup"
+ONBOARDING_GUIDE = """🏆 *JewelClaw Setup Guide*
 
-*Step 1: Save this number*
-📱 +1 (415) 523-8886
-Save as: *JewelClaw*
+Share these steps with anyone who wants to join:
 
-*Step 2: Send join code*
-Open WhatsApp chat with JewelClaw
-Send this message exactly:
+*Step 1️⃣ Save this number*
+📱 *+1 (415) 523-8886*
+Save it as "JewelClaw" in contacts
+
+*Step 2️⃣ Open WhatsApp*
+Start a new chat with JewelClaw
+
+*Step 3️⃣ Send join code*
+Type and send exactly:
 👉 *join third-find*
 
-*Step 3: You're ready!*
-Send *gold* to get live rates
-Send *subscribe* for daily 9 AM brief
+*Step 4️⃣ You're in!*
+• Send *gold* - Get live rates
+• Send *subscribe* - Daily 9 AM brief
 
-━━━━━━━━━━━━━━━━━━━━━━━━
-*Commands:*
-• gold - Live gold/silver/platinum rates
-• subscribe - Daily morning brief at 9 AM
-• unsubscribe - Stop daily briefs
-• trends - Trending jewelry designs
-• help - All commands
-━━━━━━━━━━━━━━━━━━━━━━━━
-"""
+━━━━━━━━━━━━━━━━━━━━━
+_Forward this message to invite others!_"""
 
 
 async def store_conversation(db: AsyncSession, user_id: int, role: str, message: str):
@@ -275,6 +270,10 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
     # 5. HELP → Show welcome message
     if command == "help":
         return WELCOME_MESSAGE
+
+    # 6. SETUP → Show onboarding guide
+    if command == "setup":
+        return ONBOARDING_GUIDE
 
     # ==========================================================================
     # TREND SCOUT COMMANDS
