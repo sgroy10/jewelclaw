@@ -25,6 +25,10 @@ playwright==1.41.0
 # Image Storage
 cloudinary==1.38.0
 
+# PDF Generation
+reportlab==4.1.0
+Pillow==10.2.0
+
 # Scheduling
 apscheduler==3.10.4
 

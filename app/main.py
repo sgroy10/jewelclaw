@@ -4,16 +4,17 @@ WhatsApp bot for Indian jewelry industry with gold, silver, and platinum rates.
 """
 
 import logging
+from datetime import timedelta
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.responses import PlainTextResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, desc, func
 
 from app.config import settings
 from app.database import init_db, close_db, get_db, reset_db
 # Import models to ensure they're registered with Base.metadata
-from app.models import User, Conversation, MetalRate, Design, UserDesignPreference, Lookbook
+from app.models import User, Conversation, MetalRate, Design, UserDesignPreference, Lookbook, PriceHistory, Alert, TrendReport
 from app.services.whatsapp_service import whatsapp_service
 from app.services.gold_service import metal_service
 from app.services.scheduler_service import scheduler_service
@@ -22,6 +23,9 @@ from app.services.scraper_service import scraper_service
 from app.services.playwright_scraper import playwright_scraper, PLAYWRIGHT_AVAILABLE
 from app.services.image_service import image_service
 from app.services.api_scraper import api_scraper
+from app.services.price_tracker import price_tracker
+from app.services.alerts_service import alerts_service
+from app.services.lookbook_service import lookbook_service
 
 # Configure logging
 logging.basicConfig(
@@ -103,6 +107,10 @@ Your AI-powered jewelry industry assistant.
 • *gold* - Live gold rates + expert analysis
 • *trends* - Trending jewelry designs
 • *search [query]* - Live search (e.g. search bridal necklace)
+• *like [id]* - Save a design to lookbook
+• *lookbook* - View saved designs
+• *pdf* - Generate lookbook PDF
+• *alerts* - View your price drop alerts
 • *subscribe* - Daily 9 AM morning brief
 • *setup* - How to join JewelClaw
 • *help* - Show this menu
@@ -349,6 +357,21 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
             return await handle_search_command(db, user, query, phone_number)
         return "Usage: search [query]\nExample: search bridal necklace"
 
+    # 15. PDF → Generate lookbook PDF
+    if command in ["pdf", "lookbook pdf", "create pdf"]:
+        return await handle_pdf_command(db, user, phone_number)
+
+    # 16. ALERTS → Show user alerts
+    if command == "alerts":
+        return await handle_alerts_command(db, user, phone_number)
+
+    # 17. CREATE LOOKBOOK → Create a new lookbook
+    if command == "create lookbook" or command.startswith("create lookbook"):
+        import re
+        match = re.search(r'create lookbook\s*(.*)', message_body.lower())
+        name = match.group(1).strip() if match else None
+        return await handle_create_lookbook_command(db, user, name)
+
     # Unknown command → Show welcome message
     return WELCOME_MESSAGE
 
@@ -484,6 +507,109 @@ Then reply 'like [id]' to save_"""
     lines.append(f"_Total: {len(designs)} designs saved_")
 
     return "\n".join(lines)
+
+
+async def handle_pdf_command(db: AsyncSession, user, phone_number: str) -> str:
+    """Handle PDF generation command."""
+    await whatsapp_service.send_message(phone_number, "📄 *Generating your lookbook PDF...*")
+
+    try:
+        # Generate PDF
+        pdf_bytes = await lookbook_service.generate_pdf(db, user.id)
+
+        if not pdf_bytes:
+            # Try simple version
+            pdf_bytes = await lookbook_service.generate_simple_pdf(db, user.id)
+
+        if not pdf_bytes:
+            return """📚 *No saved designs found*
+
+Save designs first with 'like [id]'
+Then use 'pdf' to generate your lookbook."""
+
+        # For now, we'll save locally and provide instructions
+        # In production, upload to Cloudinary or S3 and send via WhatsApp
+        import os
+        from datetime import datetime
+
+        # Save to temp file
+        filename = f"lookbook_{user.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        filepath = os.path.join(os.getcwd(), "temp", filename)
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+        with open(filepath, "wb") as f:
+            f.write(pdf_bytes)
+
+        logger.info(f"Generated PDF: {filepath}")
+
+        return f"""✅ *Lookbook PDF Generated!*
+
+Your lookbook has been created with all your saved designs.
+
+_PDF generation successful! File ready for download._
+
+Reply 'trends' to discover more designs."""
+
+    except Exception as e:
+        logger.error(f"PDF generation error: {e}")
+        return f"PDF generation failed: {str(e)[:50]}\n\nTry 'lookbook' to view your saved designs."
+
+
+async def handle_alerts_command(db: AsyncSession, user, phone_number: str) -> str:
+    """Handle alerts command - show user's pending alerts."""
+    alerts = await alerts_service.get_pending_alerts(db, user.id, limit=5)
+
+    if not alerts:
+        return """🔔 *Your Alerts*
+
+No new alerts!
+
+_You'll be notified when:_
+• Prices drop on saved designs
+• New arrivals in your favorite categories
+• Designs start trending"""
+
+    # Send header
+    await whatsapp_service.send_message(phone_number, f"🔔 *You have {len(alerts)} alerts*")
+
+    # Send each alert
+    for alert in alerts:
+        msg = alerts_service.format_alert_message(alert)
+
+        # Send with image if available
+        image_url = None
+        if alert.metadata and alert.metadata.get("image_url"):
+            image_url = await image_service.upload_from_url(
+                alert.metadata["image_url"],
+                "alert"
+            )
+
+        await whatsapp_service.send_message(phone_number, msg, media_url=image_url)
+
+        # Mark as sent
+        await alerts_service.mark_alert_sent(db, alert.id)
+
+    await db.commit()
+    return "_Reply 'trends' for more designs_"
+
+
+async def handle_create_lookbook_command(db: AsyncSession, user, name: str = None) -> str:
+    """Handle create lookbook command."""
+    try:
+        lookbook = await lookbook_service.create_lookbook(db, user.id, name)
+
+        design_count = len(lookbook.design_ids) if lookbook.design_ids else 0
+
+        return f"""✅ *Lookbook Created!*
+
+*{lookbook.name}*
+{design_count} designs saved
+
+_Reply 'pdf' to generate a PDF of this lookbook_"""
+
+    except Exception as e:
+        logger.error(f"Create lookbook error: {e}")
+        return "Failed to create lookbook. Try again later."
 
 
 async def handle_search_command(db: AsyncSession, user, query: str, phone_number: str) -> str:
@@ -716,6 +842,79 @@ async def migrate_trend_scout():
             logger.info("Trend Scout migration complete")
 
         return {"status": "success", "message": "Trend Scout tables created"}
+
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
+
+
+@app.post("/admin/migrate-openclaw")
+async def migrate_openclaw():
+    """Create OpenClaw tables (price_history, alerts, trend_reports)."""
+    from sqlalchemy import text
+    from app.database import engine
+
+    try:
+        async with engine.begin() as conn:
+            # Create price_history table
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS price_history (
+                    id SERIAL PRIMARY KEY,
+                    design_id INTEGER REFERENCES designs(id) ON DELETE CASCADE,
+                    price FLOAT NOT NULL,
+                    recorded_at TIMESTAMP DEFAULT NOW()
+                )
+            """))
+
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_price_history_design_time
+                ON price_history(design_id, recorded_at)
+            """))
+
+            # Create alerts table
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS alerts (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    alert_type VARCHAR(50) NOT NULL,
+                    title VARCHAR(200) NOT NULL,
+                    message TEXT,
+                    design_id INTEGER REFERENCES designs(id) ON DELETE SET NULL,
+                    metadata JSON DEFAULT '{}',
+                    is_sent BOOLEAN DEFAULT FALSE,
+                    sent_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """))
+
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_alert_user_sent
+                ON alerts(user_id, is_sent)
+            """))
+
+            # Create trend_reports table
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS trend_reports (
+                    id SERIAL PRIMARY KEY,
+                    report_type VARCHAR(50) NOT NULL,
+                    report_date TIMESTAMP NOT NULL,
+                    top_categories JSON DEFAULT '[]',
+                    top_designs JSON DEFAULT '[]',
+                    price_trends JSON DEFAULT '{}',
+                    new_arrivals_count INTEGER DEFAULT 0,
+                    source_stats JSON DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """))
+
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_trend_report_date
+                ON trend_reports(report_date)
+            """))
+
+            logger.info("OpenClaw migration complete")
+
+        return {"status": "success", "message": "OpenClaw tables created (price_history, alerts, trend_reports)"}
 
     except Exception as e:
         import traceback
@@ -1302,6 +1501,376 @@ async def trigger_morning_brief():
     """Manually trigger morning brief."""
     await scheduler_service.trigger_morning_brief_now()
     return {"status": "triggered"}
+
+
+# =============================================================================
+# OPENCLAW ENDPOINTS - Price Tracking, Alerts, Intelligence
+# =============================================================================
+
+@app.post("/admin/track-prices")
+async def track_prices(db: AsyncSession = Depends(get_db)):
+    """Record current prices for all designs and detect changes."""
+    try:
+        # Get all designs with prices
+        result = await db.execute(
+            select(Design).where(Design.price_range_min.isnot(None))
+        )
+        designs = result.scalars().all()
+
+        # Record prices and detect changes
+        changes = await price_tracker.record_all_prices(db, designs)
+
+        # Generate alerts for price drops
+        if changes:
+            drop_changes = [c for c in changes if c.is_drop]
+            if drop_changes:
+                alert_count = await alerts_service.generate_price_drop_alerts(db, drop_changes)
+            else:
+                alert_count = 0
+        else:
+            alert_count = 0
+
+        return {
+            "status": "success",
+            "designs_tracked": len(designs),
+            "price_changes_detected": len(changes),
+            "alerts_created": alert_count,
+            "changes": [
+                {
+                    "design_id": c.design_id,
+                    "title": c.title,
+                    "old_price": c.old_price,
+                    "new_price": c.new_price,
+                    "change_percent": round(c.change_percent, 1),
+                    "is_drop": c.is_drop
+                }
+                for c in changes
+            ]
+        }
+
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
+
+
+@app.get("/admin/price-drops")
+async def get_price_drops(
+    min_drop: float = 5,
+    days: int = 7,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get designs with recent price drops."""
+    try:
+        drops = await price_tracker.get_price_drops(
+            db,
+            min_drop_percent=min_drop,
+            days=days,
+            limit=limit
+        )
+        return {
+            "count": len(drops),
+            "min_drop_percent": min_drop,
+            "period_days": days,
+            "drops": drops
+        }
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
+
+
+@app.get("/admin/price-trends")
+async def get_price_trends(days: int = 7, db: AsyncSession = Depends(get_db)):
+    """Get overall price trends by category."""
+    try:
+        trends = await price_tracker.get_price_trends(db, days=days)
+        return trends
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
+
+
+@app.get("/admin/alerts/{phone}")
+async def get_user_alerts(phone: str, db: AsyncSession = Depends(get_db)):
+    """Get pending alerts for a user."""
+    try:
+        # Find user
+        result = await db.execute(select(User).where(User.phone_number == phone))
+        user = result.scalar_one_or_none()
+        if not user:
+            return {"error": "User not found"}
+
+        # Get alerts
+        alerts = await alerts_service.get_pending_alerts(db, user.id, limit=20)
+        summary = await alerts_service.get_alert_summary(db, user.id)
+
+        return {
+            "user": {"phone": user.phone_number, "name": user.name},
+            "summary": summary,
+            "alerts": [
+                {
+                    "id": a.id,
+                    "type": a.alert_type,
+                    "title": a.title,
+                    "message": a.message,
+                    "design_id": a.design_id,
+                    "is_sent": a.is_sent,
+                    "created_at": str(a.created_at)
+                }
+                for a in alerts
+            ]
+        }
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
+
+
+@app.post("/admin/send-alerts/{phone}")
+async def send_user_alerts(phone: str, db: AsyncSession = Depends(get_db)):
+    """Send all pending alerts to a user via WhatsApp."""
+    try:
+        # Find user
+        result = await db.execute(select(User).where(User.phone_number == phone))
+        user = result.scalar_one_or_none()
+        if not user:
+            return {"error": "User not found"}
+
+        # Get pending alerts
+        alerts = await alerts_service.get_pending_alerts(db, user.id, limit=10)
+
+        sent_count = 0
+        for alert in alerts:
+            msg = alerts_service.format_alert_message(alert)
+
+            # Send with image if available
+            image_url = None
+            if alert.metadata and alert.metadata.get("image_url"):
+                image_url = await image_service.upload_from_url(
+                    alert.metadata["image_url"],
+                    "alert"
+                )
+
+            sent = await whatsapp_service.send_message(phone, msg, media_url=image_url)
+            if sent:
+                await alerts_service.mark_alert_sent(db, alert.id)
+                sent_count += 1
+
+        await db.commit()
+
+        return {
+            "status": "success",
+            "alerts_sent": sent_count,
+            "phone": phone
+        }
+
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
+
+
+@app.post("/admin/scrape-all-sources")
+async def scrape_all_sources(
+    category: str = "necklaces",
+    include_pinterest: bool = True,
+    db: AsyncSession = Depends(get_db)
+):
+    """Scrape from all sources including Pinterest."""
+    try:
+        if include_pinterest:
+            designs = await api_scraper.scrape_all_with_pinterest(
+                category=category,
+                limit_per_site=10
+            )
+        else:
+            designs = await api_scraper.scrape_all(
+                category=category,
+                limit_per_site=10
+            )
+
+        saved_count = 0
+        skipped_count = 0
+
+        for design in designs:
+            # Check if exists
+            existing = await db.execute(
+                select(Design).where(Design.source_url == design.source_url)
+            )
+            if existing.scalar_one_or_none():
+                skipped_count += 1
+                continue
+
+            # Upload image to Cloudinary
+            cloudinary_url = design.image_url
+            if image_service.configured and design.image_url:
+                cloudinary_url = await image_service.upload_from_url(design.image_url, design.source)
+
+            # Save to database
+            db_design = Design(
+                source=design.source,
+                source_url=design.source_url,
+                image_url=cloudinary_url,
+                title=design.title,
+                category=design.category,
+                metal_type=design.metal_type,
+                price_range_min=design.price,
+                trending_score=75 if design.source == "pinterest" else 70
+            )
+            db.add(db_design)
+            saved_count += 1
+
+        await db.commit()
+
+        # Record prices for new designs
+        new_designs = await db.execute(
+            select(Design)
+            .where(Design.price_range_min.isnot(None))
+            .order_by(desc(Design.id))
+            .limit(saved_count)
+        )
+        await price_tracker.record_all_prices(db, new_designs.scalars().all())
+
+        return {
+            "status": "success",
+            "category": category,
+            "include_pinterest": include_pinterest,
+            "scraped": len(designs),
+            "saved": saved_count,
+            "skipped_duplicates": skipped_count,
+            "sources": list(set(d.source for d in designs))
+        }
+
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
+
+
+@app.get("/admin/generate-pdf/{phone}")
+async def generate_pdf_for_user(phone: str, db: AsyncSession = Depends(get_db)):
+    """Generate PDF lookbook for a user."""
+    try:
+        # Find user
+        result = await db.execute(select(User).where(User.phone_number == phone))
+        user = result.scalar_one_or_none()
+        if not user:
+            return {"error": "User not found"}
+
+        # Generate PDF
+        pdf_bytes = await lookbook_service.generate_pdf(db, user.id)
+
+        if not pdf_bytes:
+            pdf_bytes = await lookbook_service.generate_simple_pdf(db, user.id)
+
+        if not pdf_bytes:
+            return {"error": "No saved designs found for this user"}
+
+        # Save to file
+        import os
+        from datetime import datetime
+        filename = f"lookbook_{user.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        filepath = os.path.join(os.getcwd(), "temp", filename)
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+        with open(filepath, "wb") as f:
+            f.write(pdf_bytes)
+
+        return {
+            "status": "success",
+            "user": {"phone": user.phone_number, "name": user.name},
+            "pdf_path": filepath,
+            "pdf_size_kb": round(len(pdf_bytes) / 1024, 1)
+        }
+
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
+
+
+@app.post("/admin/generate-trend-report")
+async def generate_trend_report(db: AsyncSession = Depends(get_db)):
+    """Generate daily trend report."""
+    from datetime import datetime
+
+    try:
+        # Get category stats
+        category_result = await db.execute(
+            select(
+                Design.category,
+                func.count(Design.id).label("count"),
+                func.avg(Design.price_range_min).label("avg_price")
+            )
+            .where(Design.price_range_min.isnot(None))
+            .group_by(Design.category)
+            .order_by(desc(func.count(Design.id)))
+        )
+        category_stats = category_result.all()
+
+        top_categories = [
+            {
+                "category": row.category or "general",
+                "count": row.count,
+                "avg_price": round(row.avg_price, 0) if row.avg_price else 0
+            }
+            for row in category_stats[:5]
+        ]
+
+        # Get top designs
+        top_result = await db.execute(
+            select(Design)
+            .order_by(desc(Design.trending_score))
+            .limit(10)
+        )
+        top_designs = [
+            {"design_id": d.id, "title": d.title, "score": d.trending_score}
+            for d in top_result.scalars().all()
+        ]
+
+        # Get source stats
+        source_result = await db.execute(
+            select(
+                Design.source,
+                func.count(Design.id).label("count")
+            )
+            .group_by(Design.source)
+        )
+        source_stats = {row.source: row.count for row in source_result.all()}
+
+        # Get price trends
+        price_trends = await price_tracker.get_price_trends(db, days=7)
+
+        # Count new arrivals (last 24 hours)
+        yesterday = datetime.utcnow() - timedelta(days=1)
+        new_result = await db.execute(
+            select(func.count(Design.id))
+            .where(Design.created_at >= yesterday)
+        )
+        new_arrivals = new_result.scalar() or 0
+
+        # Save report
+        report = TrendReport(
+            report_type="daily",
+            report_date=datetime.utcnow(),
+            top_categories=top_categories,
+            top_designs=top_designs,
+            price_trends=price_trends,
+            new_arrivals_count=new_arrivals,
+            source_stats=source_stats
+        )
+        db.add(report)
+        await db.commit()
+
+        return {
+            "status": "success",
+            "report_id": report.id,
+            "report_date": str(report.report_date),
+            "top_categories": top_categories,
+            "top_designs": top_designs[:5],
+            "new_arrivals": new_arrivals,
+            "source_stats": source_stats
+        }
+
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
 
 
 @app.exception_handler(Exception)

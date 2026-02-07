@@ -237,6 +237,7 @@ class APIScraperService:
             "rings": "https://www.caratlane.com/jewellery/rings.html",
             "bangles": "https://www.caratlane.com/jewellery/bangles-bracelets.html",
             "pendants": "https://www.caratlane.com/jewellery/pendants.html",
+            "bridal": "https://www.caratlane.com/jewellery/wedding-jewellery.html",
         }
 
         url = category_urls.get(category, category_urls["necklaces"])
@@ -248,48 +249,47 @@ class APIScraperService:
 
         soup = BeautifulSoup(html, 'lxml')
 
-        # Try LD+JSON first
-        for script in soup.find_all('script', type='application/ld+json'):
+        # CaratLane uses data-product-sku and specific classes
+        # Look for product tiles
+        product_tiles = soup.select('[data-product-sku], .product-tile, .plp-product-card, [class*="ProductCard"]')
+        logger.info(f"CaratLane: Found {len(product_tiles)} product tiles")
+
+        for tile in product_tiles[:limit]:
             try:
-                data = json.loads(script.string)
-                if data.get('@type') == 'Product':
-                    designs.append(self._parse_product(data, 'caratlane', url))
-                elif data.get('@type') == 'ItemList':
-                    for item in data.get('itemListElement', [])[:limit]:
-                        if 'item' in item:
-                            designs.append(self._parse_product(item['item'], 'caratlane', url))
-            except:
+                # Get title from multiple possible locations
+                title_el = tile.select_one('[class*="product-name"], [class*="ProductName"], h3, h4, a[title]')
+                title = ""
+                if title_el:
+                    title = title_el.get_text(strip=True) or title_el.get('title', '')
+
+                # Get image
+                img = tile.select_one('img[src*="caratlane"], img[data-src*="caratlane"], img')
+                image_url = ""
+                if img:
+                    image_url = img.get('src') or img.get('data-src') or img.get('data-lazy') or ""
+
+                # Get price
+                price_el = tile.select_one('[class*="price"], [class*="Price"]')
+                price = extract_price(price_el.get_text() if price_el else "")
+
+                # Get link
+                link = tile.select_one('a[href*="/jewellery/"]')
+                source_url = link.get('href', url) if link else url
+                if not source_url.startswith('http'):
+                    source_url = f"https://www.caratlane.com{source_url}"
+
+                if title and len(title) > 3:
+                    designs.append(ScrapedDesign(
+                        title=title,
+                        price=price,
+                        image_url=image_url,
+                        source_url=source_url,
+                        source='caratlane',
+                        category=detect_category(title)
+                    ))
+            except Exception as e:
+                logger.error(f"CaratLane parse error: {e}")
                 continue
-
-        # Parse HTML
-        if not designs:
-            cards = soup.select('[data-product-id], .product-tile, .product-card')
-            for card in cards[:limit]:
-                try:
-                    title_el = card.select_one('.product-name, .product-title, h2, h3')
-                    price_el = card.select_one('.product-price, .price')
-                    img_el = card.select_one('img')
-                    link_el = card.select_one('a')
-
-                    if title_el:
-                        title = title_el.get_text(strip=True)
-                        price = extract_price(price_el.get_text() if price_el else "")
-                        image_url = img_el.get('src') or img_el.get('data-src') if img_el else ""
-                        source_url = link_el.get('href', url) if link_el else url
-
-                        if not source_url.startswith('http'):
-                            source_url = f"https://www.caratlane.com{source_url}"
-
-                        designs.append(ScrapedDesign(
-                            title=title,
-                            price=price,
-                            image_url=image_url,
-                            source_url=source_url,
-                            source='caratlane',
-                            category=detect_category(title)
-                        ))
-                except:
-                    continue
 
         logger.info(f"CaratLane: Found {len(designs)} designs")
         return designs[:limit]
@@ -302,6 +302,8 @@ class APIScraperService:
             "earrings": "https://www.tanishq.co.in/jewellery/gold-jewellery/earrings.html",
             "rings": "https://www.tanishq.co.in/jewellery/gold-jewellery/rings.html",
             "bangles": "https://www.tanishq.co.in/jewellery/gold-jewellery/bangles.html",
+            "bridal": "https://www.tanishq.co.in/jewellery/rivaah-wedding-jewellery.html",
+            "mangalsutra": "https://www.tanishq.co.in/jewellery/gold-jewellery/mangalsutra.html",
         }
 
         url = category_urls.get(category, category_urls["necklaces"])
@@ -313,48 +315,52 @@ class APIScraperService:
 
         soup = BeautifulSoup(html, 'lxml')
 
-        # Try LD+JSON
-        for script in soup.find_all('script', type='application/ld+json'):
+        # Tanishq uses product-tile class and data-pid
+        product_tiles = soup.select('.product-tile, [data-pid], .product-grid-item')
+        logger.info(f"Tanishq: Found {len(product_tiles)} product tiles")
+
+        for tile in product_tiles[:limit]:
             try:
-                data = json.loads(script.string)
-                if data.get('@type') == 'Product':
-                    designs.append(self._parse_product(data, 'tanishq', url))
-                elif data.get('@type') == 'ItemList':
-                    for item in data.get('itemListElement', [])[:limit]:
-                        if 'item' in item:
-                            designs.append(self._parse_product(item['item'], 'tanishq', url))
-            except:
+                # Get product ID
+                pid = tile.get('data-pid', '')
+
+                # Get title
+                title_el = tile.select_one('.pdp-link, .product-name, .tile-body a, h3')
+                title = ""
+                if title_el:
+                    title = title_el.get_text(strip=True) or title_el.get('title', '')
+
+                # Get image - Tanishq uses tile-image class
+                img = tile.select_one('img.tile-image, img[src*="tanishq"], img')
+                image_url = ""
+                if img:
+                    image_url = img.get('src') or img.get('data-src') or ""
+
+                # Get price
+                price_el = tile.select_one('.sales .value, .product-price, [class*="price"]')
+                price = None
+                if price_el:
+                    price_text = price_el.get('content') or price_el.get_text()
+                    price = extract_price(price_text)
+
+                # Get link
+                link = tile.select_one('a.pdp-link, a[href*="/product/"]')
+                source_url = link.get('href', url) if link else url
+                if not source_url.startswith('http'):
+                    source_url = f"https://www.tanishq.co.in{source_url}"
+
+                if title and len(title) > 3:
+                    designs.append(ScrapedDesign(
+                        title=title,
+                        price=price,
+                        image_url=image_url,
+                        source_url=source_url,
+                        source='tanishq',
+                        category=detect_category(title)
+                    ))
+            except Exception as e:
+                logger.error(f"Tanishq parse error: {e}")
                 continue
-
-        # Parse HTML
-        if not designs:
-            cards = soup.select('.product-tile, .product-card, [data-pid]')
-            for card in cards[:limit]:
-                try:
-                    title_el = card.select_one('.product-name, .pdp-link, h3')
-                    price_el = card.select_one('.product-price, .price, .sales')
-                    img_el = card.select_one('img')
-                    link_el = card.select_one('a')
-
-                    if title_el:
-                        title = title_el.get_text(strip=True)
-                        price = extract_price(price_el.get_text() if price_el else "")
-                        image_url = img_el.get('src') or img_el.get('data-src') if img_el else ""
-                        source_url = link_el.get('href', url) if link_el else url
-
-                        if not source_url.startswith('http'):
-                            source_url = f"https://www.tanishq.co.in{source_url}"
-
-                        designs.append(ScrapedDesign(
-                            title=title,
-                            price=price,
-                            image_url=image_url,
-                            source_url=source_url,
-                            source='tanishq',
-                            category=detect_category(title)
-                        ))
-                except:
-                    continue
 
         logger.info(f"Tanishq: Found {len(designs)} designs")
         return designs[:limit]
@@ -384,8 +390,69 @@ class APIScraperService:
             category=detect_category(title)
         )
 
+    async def scrape_pinterest(self, query: str = "indian gold jewelry", limit: int = 20) -> List[ScrapedDesign]:
+        """Scrape trending jewelry from Pinterest."""
+        designs = []
+
+        # Pinterest search URL
+        search_query = query.replace(' ', '%20')
+        url = f"https://www.pinterest.com/search/pins/?q={search_query}"
+        logger.info(f"Scraping Pinterest: {url}")
+
+        html = await self.fetch_rendered_page(url, render_js=True)
+        if not html:
+            return designs
+
+        soup = BeautifulSoup(html, 'lxml')
+
+        # Pinterest uses data-test-id="pin" or similar structures
+        pins = soup.select('[data-test-id="pin"], [class*="Pin"], .pinWrapper')
+        logger.info(f"Pinterest: Found {len(pins)} pins")
+
+        for pin in pins[:limit]:
+            try:
+                # Get image
+                img = pin.select_one('img[src*="pinimg"], img')
+                image_url = ""
+                if img:
+                    image_url = img.get('src') or img.get('data-src') or ""
+                    # Get higher resolution
+                    image_url = image_url.replace('/236x/', '/564x/')
+
+                # Get title/alt text
+                title = ""
+                if img:
+                    title = img.get('alt', '')
+                if not title:
+                    title_el = pin.select_one('[class*="title"], [class*="description"]')
+                    if title_el:
+                        title = title_el.get_text(strip=True)
+
+                # Get link
+                link = pin.select_one('a[href*="/pin/"]')
+                source_url = ""
+                if link:
+                    href = link.get('href', '')
+                    source_url = f"https://www.pinterest.com{href}" if href.startswith('/') else href
+
+                if image_url and len(title) > 3:
+                    designs.append(ScrapedDesign(
+                        title=title[:100],  # Truncate long titles
+                        price=None,  # Pinterest doesn't have prices
+                        image_url=image_url,
+                        source_url=source_url or url,
+                        source='pinterest',
+                        category=detect_category(title or query)
+                    ))
+            except Exception as e:
+                logger.error(f"Pinterest parse error: {e}")
+                continue
+
+        logger.info(f"Pinterest: Found {len(designs)} designs")
+        return designs[:limit]
+
     async def scrape_all(self, category: str = "necklaces", limit_per_site: int = 10) -> List[ScrapedDesign]:
-        """Scrape from all sources."""
+        """Scrape from all jewelry sites."""
         all_designs = []
 
         # Scrape each site
@@ -396,8 +463,65 @@ class APIScraperService:
             except Exception as e:
                 logger.error(f"Scraper error: {e}")
 
-        logger.info(f"Total scraped: {len(all_designs)} designs")
+        logger.info(f"Total scraped from jewelry sites: {len(all_designs)} designs")
         return all_designs
+
+    async def scrape_all_with_pinterest(self, category: str = "necklaces", limit_per_site: int = 10) -> List[ScrapedDesign]:
+        """Scrape from all sources including Pinterest."""
+        all_designs = []
+
+        # Scrape jewelry sites
+        all_designs.extend(await self.scrape_all(category=category, limit_per_site=limit_per_site))
+
+        # Scrape Pinterest with relevant query
+        pinterest_queries = {
+            "necklaces": "indian gold necklace designs",
+            "earrings": "indian gold earrings designs",
+            "rings": "indian gold ring designs",
+            "bangles": "indian gold bangles designs",
+            "bridal": "indian bridal jewelry gold",
+            "mangalsutra": "mangalsutra designs gold",
+            "temple": "temple jewelry gold south indian",
+        }
+        query = pinterest_queries.get(category, "indian gold jewelry designs")
+
+        try:
+            pinterest_designs = await self.scrape_pinterest(query=query, limit=limit_per_site)
+            all_designs.extend(pinterest_designs)
+        except Exception as e:
+            logger.error(f"Pinterest scraper error: {e}")
+
+        logger.info(f"Total scraped with Pinterest: {len(all_designs)} designs")
+        return all_designs
+
+    async def scrape_trending(self) -> Dict[str, List[ScrapedDesign]]:
+        """Scrape trending designs across all categories and sources."""
+        trending = {
+            "new_arrivals": [],
+            "bridal": [],
+            "dailywear": [],
+            "pinterest_trending": [],
+        }
+
+        try:
+            # New arrivals from all sites
+            trending["new_arrivals"] = await self.scrape_all(category="necklaces", limit_per_site=5)
+
+            # Bridal collection
+            trending["bridal"] = await self.scrape_all(category="bridal", limit_per_site=5)
+
+            # Dailywear/lightweight
+            trending["dailywear"] = await self.scrape_all(category="earrings", limit_per_site=5)
+
+            # Pinterest trending
+            trending["pinterest_trending"] = await self.scrape_pinterest(
+                query="trending indian jewelry 2024",
+                limit=10
+            )
+        except Exception as e:
+            logger.error(f"Trending scrape error: {e}")
+
+        return trending
 
     async def search(self, query: str, limit_per_site: int = 10) -> List[ScrapedDesign]:
         """Search for designs by query."""

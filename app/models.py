@@ -224,3 +224,71 @@ class Lookbook(Base):
 
     # Relationships
     user = relationship("User", back_populates="lookbooks")
+
+
+# =============================================================================
+# PRICE TRACKING & ALERTS
+# =============================================================================
+
+class PriceHistory(Base):
+    """Track price changes for designs over time."""
+
+    __tablename__ = "price_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    design_id = Column(Integer, ForeignKey("designs.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    price = Column(Float, nullable=False)
+    recorded_at = Column(DateTime, server_default=func.now(), index=True)
+
+    __table_args__ = (
+        Index("idx_price_history_design_time", "design_id", "recorded_at"),
+    )
+
+
+class Alert(Base):
+    """User alerts for price drops, new arrivals, etc."""
+
+    __tablename__ = "alerts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    alert_type = Column(String(50), nullable=False)  # price_drop, new_arrival, trending, competitor_update
+    title = Column(String(200), nullable=False)
+    message = Column(Text, nullable=True)
+    design_id = Column(Integer, ForeignKey("designs.id", ondelete="SET NULL"), nullable=True)
+
+    # Alert metadata
+    metadata = Column(JSON, default={})  # {"old_price": 50000, "new_price": 45000, "drop_percent": 10}
+
+    # Status
+    is_sent = Column(Boolean, default=False)
+    sent_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_alert_user_sent", "user_id", "is_sent"),
+    )
+
+
+class TrendReport(Base):
+    """Daily/weekly trend analysis reports."""
+
+    __tablename__ = "trend_reports"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    report_type = Column(String(50), nullable=False)  # daily, weekly
+    report_date = Column(DateTime, nullable=False, index=True)
+
+    # Trend data
+    top_categories = Column(JSON, default=[])  # [{"category": "bridal", "count": 45, "change": "+15%"}]
+    top_designs = Column(JSON, default=[])  # [{"design_id": 123, "score": 95}]
+    price_trends = Column(JSON, default={})  # {"avg_necklace_price": 75000, "change": "-2%"}
+    new_arrivals_count = Column(Integer, default=0)
+
+    # Source breakdown
+    source_stats = Column(JSON, default={})  # {"bluestone": 25, "caratlane": 18, "tanishq": 12}
+
+    created_at = Column(DateTime, server_default=func.now())
