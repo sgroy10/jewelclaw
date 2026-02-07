@@ -21,6 +21,7 @@ from app.services.memory_service import memory_service
 from app.services.scraper_service import scraper_service
 from app.services.playwright_scraper import playwright_scraper, PLAYWRIGHT_AVAILABLE
 from app.services.image_service import image_service
+from app.services.api_scraper import api_scraper
 
 # Configure logging
 logging.basicConfig(
@@ -486,19 +487,13 @@ Then reply 'like [id]' to save_"""
 
 
 async def handle_search_command(db: AsyncSession, user, query: str, phone_number: str) -> str:
-    """Handle live search command using Playwright scraper."""
-    if not PLAYWRIGHT_AVAILABLE or not playwright_scraper.browser:
-        return """🔍 *Live Search*
-
-Live search is currently unavailable.
-Please try 'trends' to see trending designs."""
-
+    """Handle live search command using API scraper."""
     # Send initial message
     await whatsapp_service.send_message(phone_number, f"🔍 *Searching for '{query}'...*\n\n_Scraping BlueStone, CaratLane, Tanishq..._")
 
     try:
-        # Run live search across all sites
-        designs = await playwright_scraper.search_all(query, limit_per_site=5)
+        # Run live search across all sites using API scraper
+        designs = await api_scraper.search(query, limit_per_site=5)
 
         if not designs:
             return f"No designs found for '{query}'.\n\nTry different keywords like 'bridal necklace' or 'daily wear earrings'."
@@ -1004,9 +999,106 @@ async def get_conversations(phone: str, limit: int = 10, db: AsyncSession = Depe
     }
 
 
+@app.get("/admin/scraper/status")
+async def scraper_status():
+    """Check all scraper statuses."""
+    return {
+        "api_scraper_configured": api_scraper.configured,
+        "cloudinary_configured": image_service.configured,
+        "playwright_available": PLAYWRIGHT_AVAILABLE,
+        "browser_running": playwright_scraper.browser is not None if PLAYWRIGHT_AVAILABLE else False,
+    }
+
+
+@app.post("/admin/scraper/test/{source}")
+async def test_api_scraper(source: str, category: str = "necklaces", limit: int = 10):
+    """Test API scraper for a specific source."""
+    try:
+        if source == "bluestone":
+            designs = await api_scraper.scrape_bluestone(category=category, limit=limit)
+        elif source == "caratlane":
+            designs = await api_scraper.scrape_caratlane(category=category, limit=limit)
+        elif source == "tanishq":
+            designs = await api_scraper.scrape_tanishq(category=category, limit=limit)
+        elif source == "all":
+            designs = await api_scraper.scrape_all(category=category, limit_per_site=limit)
+        else:
+            return {"error": f"Unknown source: {source}. Use: bluestone, caratlane, tanishq, all"}
+
+        return {
+            "source": source,
+            "api_configured": api_scraper.configured,
+            "count": len(designs),
+            "designs": [
+                {
+                    "title": d.title,
+                    "price": d.price,
+                    "image_url": d.image_url[:100] + "..." if d.image_url and len(d.image_url) > 100 else d.image_url,
+                    "source": d.source,
+                    "category": d.category
+                }
+                for d in designs
+            ]
+        }
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()}
+
+
+@app.post("/admin/scraper/save-designs")
+async def scraper_save_designs(category: str = "necklaces", db: AsyncSession = Depends(get_db)):
+    """Scrape designs and save to database with Cloudinary images."""
+    try:
+        designs = await api_scraper.scrape_all(category=category, limit_per_site=10)
+
+        saved_count = 0
+        skipped_count = 0
+
+        for design in designs:
+            # Check if exists
+            existing = await db.execute(
+                select(Design).where(Design.source_url == design.source_url)
+            )
+            if existing.scalar_one_or_none():
+                skipped_count += 1
+                continue
+
+            # Upload image to Cloudinary
+            cloudinary_url = design.image_url
+            if image_service.configured and design.image_url:
+                cloudinary_url = await image_service.upload_from_url(design.image_url, design.source)
+
+            # Save to database
+            db_design = Design(
+                source=design.source,
+                source_url=design.source_url,
+                image_url=cloudinary_url,
+                title=design.title,
+                category=design.category,
+                metal_type=design.metal_type,
+                price_range_min=design.price,
+                trending_score=70
+            )
+            db.add(db_design)
+            saved_count += 1
+
+        await db.commit()
+
+        return {
+            "status": "success",
+            "scraped": len(designs),
+            "saved": saved_count,
+            "skipped_duplicates": skipped_count
+        }
+
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()}
+
+
 @app.get("/admin/playwright/status")
 async def playwright_status():
-    """Check Playwright scraper status."""
+    """Check Playwright scraper status (legacy endpoint)."""
     return {
         "playwright_available": PLAYWRIGHT_AVAILABLE,
         "browser_running": playwright_scraper.browser is not None if PLAYWRIGHT_AVAILABLE else False,

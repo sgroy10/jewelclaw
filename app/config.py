@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     cloudinary_api_key: str = Field(default="")
     cloudinary_api_secret: str = Field(default="")
 
+    # ScraperAPI (for JavaScript-rendered scraping)
+    scraper_api_key: str = Field(default="")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
