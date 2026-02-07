@@ -371,9 +371,11 @@ _New designs will be available soon!_"""
         price_text = f"₹{d.price_range_min:,.0f}" if d.price_range_min else "Price N/A"
         caption = f"*{i}. {d.title[:50]}*\n{d.category or 'General'} | {price_text}\n_Source: {d.source}_\n\nReply 'like {d.id}' to save"
 
-        # Send with image if available
+        # Send with image if available - convert via Cloudinary (webp -> jpg for Twilio)
         if d.image_url:
-            await whatsapp_service.send_message(phone_number, caption, media_url=d.image_url)
+            # Upload to Cloudinary to convert webp to jpg
+            cloudinary_url = await image_service.upload_from_url(d.image_url, d.source)
+            await whatsapp_service.send_message(phone_number, caption, media_url=cloudinary_url)
         else:
             await whatsapp_service.send_message(phone_number, caption)
 
@@ -410,8 +412,10 @@ _Try 'trends' to see all trending designs_"""
         price_text = f"₹{d.price_range_min:,.0f}" if d.price_range_min else "Price N/A"
         caption = f"*{i}. {d.title[:50]}*\n{price_text} | {d.source}\n\nReply 'like {d.id}' to save"
 
+        # Convert via Cloudinary (webp -> jpg for Twilio)
         if d.image_url:
-            await whatsapp_service.send_message(phone_number, caption, media_url=d.image_url)
+            cloudinary_url = await image_service.upload_from_url(d.image_url, d.source)
+            await whatsapp_service.send_message(phone_number, caption, media_url=cloudinary_url)
         else:
             await whatsapp_service.send_message(phone_number, caption)
 
@@ -852,31 +856,35 @@ async def test_twilio(phone: str):
 
 @app.get("/admin/test-image/{phone}")
 async def test_image(phone: str, source: str = "unsplash"):
-    """Test sending an image via Twilio with detailed response."""
+    """Test sending an image via Twilio with Cloudinary conversion."""
     try:
         from twilio.rest import Client
         client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
 
         # Test different image sources
         if source == "bluestone":
-            test_image_url = "https://kinclimg0.bluestone.com/f_webp,c_scale,w_418,b_rgb:f0f0f0/giproduct/BISN0672N04_YAA18DIG6XXXXXXXX_ABCD00-PICS-00003-1024-49416.png"
+            original_url = "https://kinclimg0.bluestone.com/f_webp,c_scale,w_418,b_rgb:f0f0f0/giproduct/BISN0672N04_YAA18DIG6XXXXXXXX_ABCD00-PICS-00003-1024-49416.png"
             caption = "🔥 BlueStone Test\n\nThe Cursive A Necklace\n₹50,989"
         else:
-            test_image_url = "https://images.unsplash.com/photo-1515562141207-7a88fb7ce338?w=400"
+            original_url = "https://images.unsplash.com/photo-1515562141207-7a88fb7ce338?w=400"
             caption = "🔥 Unsplash Test\n\nGold Jewelry Test"
+
+        # Convert via Cloudinary (webp -> jpg for Twilio compatibility)
+        cloudinary_url = await image_service.upload_from_url(original_url, source)
 
         msg = client.messages.create(
             body=caption,
             from_=settings.twilio_whatsapp_number,
             to=f"whatsapp:{phone}",
-            media_url=[test_image_url]
+            media_url=[cloudinary_url]
         )
 
         return {
             "status": "sent",
             "phone": phone,
             "source": source,
-            "image_url": test_image_url,
+            "original_url": original_url,
+            "cloudinary_url": cloudinary_url,
             "twilio_sid": msg.sid,
             "twilio_status": msg.status,
             "num_media": msg.num_media
