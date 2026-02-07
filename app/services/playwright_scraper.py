@@ -26,6 +26,9 @@ try:
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
+    Browser = None
+    Page = None
+    async_playwright = None
     logger.warning("Playwright not installed. Run: playwright install chromium")
 
 

@@ -578,9 +578,9 @@ _You'll be notified when:_
 
         # Send with image if available
         image_url = None
-        if alert.metadata and alert.metadata.get("image_url"):
+        if alert.extra_data and alert.extra_data.get("image_url"):
             image_url = await image_service.upload_from_url(
-                alert.metadata["image_url"],
+                alert.extra_data["image_url"],
                 "alert"
             )
 
@@ -880,7 +880,7 @@ async def migrate_openclaw():
                     title VARCHAR(200) NOT NULL,
                     message TEXT,
                     design_id INTEGER REFERENCES designs(id) ON DELETE SET NULL,
-                    metadata JSON DEFAULT '{}',
+                    extra_data JSON DEFAULT '{}',
                     is_sent BOOLEAN DEFAULT FALSE,
                     sent_at TIMESTAMP,
                     created_at TIMESTAMP DEFAULT NOW()
@@ -1644,9 +1644,9 @@ async def send_user_alerts(phone: str, db: AsyncSession = Depends(get_db)):
 
             # Send with image if available
             image_url = None
-            if alert.metadata and alert.metadata.get("image_url"):
+            if alert.extra_data and alert.extra_data.get("image_url"):
                 image_url = await image_service.upload_from_url(
-                    alert.metadata["image_url"],
+                    alert.extra_data["image_url"],
                     "alert"
                 )
 

@@ -259,8 +259,8 @@ class Alert(Base):
     message = Column(Text, nullable=True)
     design_id = Column(Integer, ForeignKey("designs.id", ondelete="SET NULL"), nullable=True)
 
-    # Alert metadata
-    metadata = Column(JSON, default={})  # {"old_price": 50000, "new_price": 45000, "drop_percent": 10}
+    # Alert extra data
+    extra_data = Column(JSON, default={})  # {"old_price": 50000, "new_price": 45000, "drop_percent": 10}
 
     # Status
     is_sent = Column(Boolean, default=False)

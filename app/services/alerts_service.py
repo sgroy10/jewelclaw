@@ -39,7 +39,7 @@ class AlertsService:
                    f"Was Rs.{price_change.old_price:,.0f}, "
                    f"now Rs.{price_change.new_price:,.0f}",
             design_id=price_change.design_id,
-            metadata={
+            extra_data={
                 "old_price": price_change.old_price,
                 "new_price": price_change.new_price,
                 "drop_percent": drop_percent,
@@ -64,7 +64,7 @@ class AlertsService:
             title=f"New Arrival: {design.title[:50]}",
             message=f"New {design.category or 'design'} from {design.source}. {price_text}",
             design_id=design.id,
-            metadata={
+            extra_data={
                 "source": design.source,
                 "category": design.category,
                 "price": design.price_range_min,
@@ -94,7 +94,7 @@ class AlertsService:
             alert_type="trending",
             title=title,
             message=f"Check out: {design_names}...",
-            metadata={
+            extra_data={
                 "design_ids": [d.id for d in designs],
                 "category": category,
                 "count": len(designs)
@@ -253,7 +253,7 @@ class AlertsService:
     def format_alert_message(self, alert: Alert) -> str:
         """Format an alert for WhatsApp delivery."""
         if alert.alert_type == "price_drop":
-            meta = alert.metadata or {}
+            meta = alert.extra_data or {}
             return f"""🏷️ *Price Drop Alert!*
 
 {alert.title}
@@ -265,7 +265,7 @@ Now: Rs.{meta.get('new_price', 0):,.0f}
 _Reply 'like {alert.design_id}' to save this design_"""
 
         elif alert.alert_type == "new_arrival":
-            meta = alert.metadata or {}
+            meta = alert.extra_data or {}
             return f"""✨ *New Arrival!*
 
 {alert.title}
