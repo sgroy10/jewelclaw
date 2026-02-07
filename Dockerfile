@@ -19,5 +19,5 @@ COPY . .
 # Note: Playwright browser scraping disabled on Railway (use API scrapers instead)
 # To enable Playwright locally: pip install playwright && playwright install chromium
 
-# Run the app
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the app (Railway provides PORT env var)
+CMD sh -c "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
