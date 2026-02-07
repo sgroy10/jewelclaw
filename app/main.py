@@ -1138,18 +1138,26 @@ async def debug_scraper(url: str = "https://www.bluestone.com/jewellery/gold-nec
                 except:
                     pass
 
-            # Find product elements
-            product_divs = soup.select('[class*="product"]')[:3]
-            product_samples = [str(div)[:300] for div in product_divs]
+            # Search for actual product elements with images
+            # BlueStone uses kinclimg for product images
+            img_tags = soup.select('img[src*="kinclimg"], img[data-src*="kinclimg"]')[:5]
+            img_parents = []
+            for img in img_tags:
+                parent = img.find_parent('div')
+                if parent:
+                    img_parents.append(str(parent)[:400])
+
+            # Look for anchor links to product pages
+            product_links = soup.select('a[href*="/jewellery/"][href*=".html"]')[:5]
+            link_samples = [(a.get('href', ''), a.get('title', ''), a.get_text(strip=True)[:50]) for a in product_links]
 
             return {
                 "status": "success",
                 "html_length": len(html),
-                "ld_json_blocks": ld_json_count,
-                "ld_json_preview": ld_json_content,
-                "product_divs_found": len(soup.select('[class*="product"]')),
-                "product_samples": product_samples,
-                "image_urls_found": len(image_urls),
+                "ld_json_preview": ld_json_content[:200] if ld_json_content else None,
+                "product_images": len(soup.select('img[src*="kinclimg"]')),
+                "img_parent_samples": img_parents[:2],
+                "product_links": link_samples,
             }
         else:
             return {"status": "failed", "html": None}
