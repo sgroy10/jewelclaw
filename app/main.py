@@ -1037,6 +1037,7 @@ async def test_api_scraper(source: str, category: str = "necklaces", limit: int 
         return {
             "source": source,
             "api_configured": api_scraper.configured,
+            "api_key_length": len(api_scraper.api_key) if api_scraper.api_key else 0,
             "count": len(designs),
             "designs": [
                 {
@@ -1046,7 +1047,7 @@ async def test_api_scraper(source: str, category: str = "necklaces", limit: int 
                     "source": d.source,
                     "category": d.category
                 }
-                for d in designs
+                for d in designs[:10]  # Limit output
             ]
         }
     except Exception as e:

@@ -104,12 +104,16 @@ class APIScraperService:
                 "country_code": "in",  # India for local pricing
             }
 
+            logger.info(f"ScraperAPI request: {url}")
             async with httpx.AsyncClient(timeout=60) as client:
                 response = await client.get(self.base_url, params=params)
+                logger.info(f"ScraperAPI response: status={response.status_code}, length={len(response.text)}")
                 if response.status_code == 200:
+                    # Log first 500 chars for debug
+                    logger.info(f"ScraperAPI HTML preview: {response.text[:500]}")
                     return response.text
                 else:
-                    logger.error(f"ScraperAPI error: {response.status_code}")
+                    logger.error(f"ScraperAPI error: {response.status_code} - {response.text[:200]}")
                     return None
 
         except Exception as e:
