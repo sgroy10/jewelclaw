@@ -1106,6 +1106,30 @@ async def scraper_save_designs(category: str = "necklaces", db: AsyncSession = D
         return {"error": str(e), "trace": traceback.format_exc()}
 
 
+@app.post("/admin/scraper/debug")
+async def debug_scraper(url: str = "https://www.bluestone.com/jewellery/gold-necklaces.html", api_key: str = None):
+    """Debug: See raw ScraperAPI response."""
+    import os
+    if api_key:
+        os.environ["SCRAPER_API_KEY"] = api_key
+
+    try:
+        html = await api_scraper.fetch_rendered_page(url, render_js=True)
+        if html:
+            return {
+                "status": "success",
+                "html_length": len(html),
+                "html_preview": html[:2000],
+                "contains_product": "product" in html.lower(),
+                "contains_price": "price" in html.lower(),
+            }
+        else:
+            return {"status": "failed", "html": None}
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()}
+
+
 @app.get("/admin/playwright/status")
 async def playwright_status():
     """Check Playwright scraper status (legacy endpoint)."""
