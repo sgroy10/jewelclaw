@@ -63,6 +63,10 @@ COMMANDS = {
     "lookbook": "lookbook",
     "saved": "lookbook",
     "favorites": "lookbook",
+
+    # Live search (Playwright)
+    "search": "search",
+    "find": "search",
 }
 
 

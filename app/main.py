@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.responses import PlainTextResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.config import settings
 from app.database import init_db, close_db, get_db, reset_db
@@ -18,6 +19,8 @@ from app.services.gold_service import metal_service
 from app.services.scheduler_service import scheduler_service
 from app.services.memory_service import memory_service
 from app.services.scraper_service import scraper_service
+from app.services.playwright_scraper import playwright_scraper, PLAYWRIGHT_AVAILABLE
+from app.services.image_service import image_service
 
 # Configure logging
 logging.basicConfig(
@@ -33,11 +36,34 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.app_name}...")
     await init_db()
     scheduler_service.start()
+
+    # Configure Cloudinary if credentials available
+    if settings.cloudinary_cloud_name and settings.cloudinary_api_key:
+        image_service.configure(
+            settings.cloudinary_cloud_name,
+            settings.cloudinary_api_key,
+            settings.cloudinary_api_secret
+        )
+        logger.info("Cloudinary configured")
+
+    # Start Playwright browser if available
+    if PLAYWRIGHT_AVAILABLE:
+        try:
+            await playwright_scraper.start()
+            logger.info("Playwright browser started")
+        except Exception as e:
+            logger.warning(f"Playwright start failed: {e}")
+
     logger.info("Application started successfully")
 
     yield
 
     logger.info("Shutting down...")
+
+    # Stop Playwright browser
+    if PLAYWRIGHT_AVAILABLE and playwright_scraper.browser:
+        await playwright_scraper.stop()
+
     scheduler_service.stop()
     await close_db()
     logger.info("Application stopped")
@@ -75,6 +101,7 @@ Your AI-powered jewelry industry assistant.
 *Commands:*
 • *gold* - Live gold rates + expert analysis
 • *trends* - Trending jewelry designs
+• *search [query]* - Live search (e.g. search bridal necklace)
 • *subscribe* - Daily 9 AM morning brief
 • *setup* - How to join JewelClaw
 • *help* - Show this menu
@@ -194,7 +221,7 @@ async def whatsapp_webhook(
             # Normal command handling
             command = whatsapp_service.parse_command(message_body)
             logger.info(f"COMMAND: {command}")
-            response = await handle_command(db, user, command, phone_number, is_new_user)
+            response = await handle_command(db, user, command, phone_number, is_new_user, message_body)
             logger.info(f"RESPONSE LENGTH: {len(response) if response else 0}")
 
         # Send response
@@ -216,7 +243,7 @@ async def whatsapp_webhook(
         return PlainTextResponse("")
 
 
-async def handle_command(db: AsyncSession, user, command: str, phone_number: str, is_new_user: bool = False) -> str:
+async def handle_command(db: AsyncSession, user, command: str, phone_number: str, is_new_user: bool = False, message_body: str = "") -> str:
     """Handle commands: hi/hello, gold, subscribe, unsubscribe, help."""
     city = user.preferred_city or "Mumbai"
 
@@ -310,6 +337,16 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
     # 13. LOOKBOOK → Show saved designs
     if command == "lookbook":
         return await handle_lookbook_command(db, user)
+
+    # 14. SEARCH → Live search via Playwright
+    if command == "search":
+        # Extract search query from the message
+        import re
+        match = re.search(r'(?:search|find)\s+(.+)', message_body.lower())
+        if match:
+            query = match.group(1).strip()
+            return await handle_search_command(db, user, query, phone_number)
+        return "Usage: search [query]\nExample: search bridal necklace"
 
     # Unknown command → Show welcome message
     return WELCOME_MESSAGE
@@ -442,6 +479,63 @@ Then reply 'like [id]' to save_"""
     lines.append(f"_Total: {len(designs)} designs saved_")
 
     return "\n".join(lines)
+
+
+async def handle_search_command(db: AsyncSession, user, query: str, phone_number: str) -> str:
+    """Handle live search command using Playwright scraper."""
+    if not PLAYWRIGHT_AVAILABLE or not playwright_scraper.browser:
+        return """🔍 *Live Search*
+
+Live search is currently unavailable.
+Please try 'trends' to see trending designs."""
+
+    # Send initial message
+    await whatsapp_service.send_message(phone_number, f"🔍 *Searching for '{query}'...*\n\n_Scraping BlueStone, CaratLane, Tanishq..._")
+
+    try:
+        # Run live search across all sites
+        designs = await playwright_scraper.search_all(query, limit_per_site=5)
+
+        if not designs:
+            return f"No designs found for '{query}'.\n\nTry different keywords like 'bridal necklace' or 'daily wear earrings'."
+
+        # Save designs to database for future reference
+        for design in designs[:10]:
+            existing = await db.execute(
+                select(Design).where(Design.source_url == design.source_url)
+            )
+            if not existing.scalar_one_or_none():
+                db_design = Design(
+                    source=design.source,
+                    source_url=design.source_url,
+                    image_url=design.image_url,
+                    title=design.title,
+                    category=design.category,
+                    metal_type=design.metal_type,
+                    price_range_min=design.price,
+                    trending_score=70  # High score for live search results
+                )
+                db.add(db_design)
+
+        await db.commit()
+
+        # Send each design with image
+        for i, design in enumerate(designs[:5], 1):
+            price_text = f"₹{design.price:,.0f}" if design.price else "Price N/A"
+            caption = f"*{i}. {design.title[:50]}*\n{design.category} | {price_text}\n_Source: {design.source}_"
+
+            if design.image_url:
+                # Upload to Cloudinary for reliable delivery
+                cloudinary_url = await image_service.upload_from_url(design.image_url, design.source)
+                await whatsapp_service.send_message(phone_number, caption, media_url=cloudinary_url)
+            else:
+                await whatsapp_service.send_message(phone_number, caption)
+
+        return f"_Found {len(designs)} designs for '{query}'_"
+
+    except Exception as e:
+        logger.error(f"Search error: {e}")
+        return f"Search failed: {str(e)[:100]}\n\nTry 'trends' for cached designs."
 
 
 # API Endpoints
@@ -807,7 +901,7 @@ async def simulate_gold(phone: str, db: AsyncSession = Depends(get_db)):
         steps.append(f"2. User: {user.phone_number}, new={is_new}")
 
         # Step 3: Get response
-        response = await handle_command(db, user, command, f"whatsapp:{phone}", is_new)
+        response = await handle_command(db, user, command, f"whatsapp:{phone}", is_new, "gold")
         steps.append(f"3. Response length: {len(response) if response else 0}")
         steps.append(f"4. Response preview: {response[:200] if response else 'None'}...")
 
@@ -900,6 +994,127 @@ async def get_conversations(phone: str, limit: int = 10, db: AsyncSession = Depe
             for c in reversed(convs)
         ]
     }
+
+
+@app.get("/admin/playwright/status")
+async def playwright_status():
+    """Check Playwright scraper status."""
+    return {
+        "playwright_available": PLAYWRIGHT_AVAILABLE,
+        "browser_running": playwright_scraper.browser is not None if PLAYWRIGHT_AVAILABLE else False,
+        "cloudinary_configured": image_service.configured
+    }
+
+
+@app.post("/admin/playwright/scrape/{source}")
+async def playwright_scrape(source: str, query: str = None, category: str = None, limit: int = 10):
+    """Test Playwright scraper for a specific source."""
+    if not PLAYWRIGHT_AVAILABLE:
+        return {"error": "Playwright not installed"}
+
+    if not playwright_scraper.browser:
+        try:
+            await playwright_scraper.start()
+        except Exception as e:
+            return {"error": f"Failed to start browser: {e}"}
+
+    try:
+        if source == "bluestone":
+            designs = await playwright_scraper.scrape_bluestone(query=query, category=category, limit=limit)
+        elif source == "caratlane":
+            designs = await playwright_scraper.scrape_caratlane(query=query, category=category, limit=limit)
+        elif source == "tanishq":
+            designs = await playwright_scraper.scrape_tanishq(query=query, category=category, limit=limit)
+        elif source == "all":
+            if query:
+                designs = await playwright_scraper.search_all(query, limit_per_site=limit)
+            else:
+                designs = await playwright_scraper.scrape_category(category or "necklaces", limit_per_site=limit)
+        else:
+            return {"error": f"Unknown source: {source}. Use: bluestone, caratlane, tanishq, all"}
+
+        return {
+            "source": source,
+            "count": len(designs),
+            "designs": [
+                {
+                    "title": d.title,
+                    "price": d.price,
+                    "image_url": d.image_url,
+                    "source_url": d.source_url,
+                    "category": d.category
+                }
+                for d in designs
+            ]
+        }
+
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()}
+
+
+@app.post("/admin/playwright/save-to-db")
+async def playwright_save_to_db(query: str = None, category: str = "necklaces", db: AsyncSession = Depends(get_db)):
+    """Scrape with Playwright and save to database."""
+    if not PLAYWRIGHT_AVAILABLE:
+        return {"error": "Playwright not installed"}
+
+    if not playwright_scraper.browser:
+        try:
+            await playwright_scraper.start()
+        except Exception as e:
+            return {"error": f"Failed to start browser: {e}"}
+
+    try:
+        # Scrape designs
+        if query:
+            designs = await playwright_scraper.search_all(query, limit_per_site=10)
+        else:
+            designs = await playwright_scraper.scrape_category(category, limit_per_site=10)
+
+        saved_count = 0
+        skipped_count = 0
+
+        for design in designs:
+            # Check if already exists
+            existing = await db.execute(
+                select(Design).where(Design.source_url == design.source_url)
+            )
+            if existing.scalar_one_or_none():
+                skipped_count += 1
+                continue
+
+            # Upload image to Cloudinary if configured
+            cloudinary_url = None
+            if image_service.configured and design.image_url:
+                cloudinary_url = await image_service.upload_from_url(design.image_url, design.source)
+
+            # Save to database
+            db_design = Design(
+                source=design.source,
+                source_url=design.source_url,
+                image_url=cloudinary_url or design.image_url,
+                title=design.title,
+                category=design.category,
+                metal_type=design.metal_type,
+                price_range_min=design.price,
+                trending_score=70  # High score for Playwright scraped designs
+            )
+            db.add(db_design)
+            saved_count += 1
+
+        await db.commit()
+
+        return {
+            "status": "success",
+            "scraped": len(designs),
+            "saved": saved_count,
+            "skipped_duplicates": skipped_count
+        }
+
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()}
 
 
 @app.get("/scheduler/status")

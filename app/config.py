@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     # Test phone number
     test_phone_number: str = Field(default="")
 
+    # Cloudinary (for image storage)
+    cloudinary_cloud_name: str = Field(default="")
+    cloudinary_api_key: str = Field(default="")
+    cloudinary_api_secret: str = Field(default="")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

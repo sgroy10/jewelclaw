@@ -19,6 +19,12 @@ beautifulsoup4==4.12.3
 httpx==0.26.0
 lxml==5.1.0
 
+# Headless Browser Scraping
+playwright==1.41.0
+
+# Image Storage
+cloudinary==1.38.0
+
 # Scheduling
 apscheduler==3.10.4
 
