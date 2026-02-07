@@ -182,45 +182,47 @@ class APIScraperService:
                 logger.error(f"LD+JSON parse error: {e}")
                 continue
 
-        # Method 2: Parse HTML directly - try multiple selectors
+        # Method 2: Parse HTML - BlueStone uses div.p-image with data-plink
         if not designs:
-            # BlueStone specific selectors
-            cards = soup.select('.product-grid-item, .product-box, .plp-product-card, [class*="product"]')
-            logger.info(f"HTML method: found {len(cards)} potential product cards")
-            for card in cards[:limit*2]:  # Check more cards
+            product_divs = soup.select('div.p-image[data-plink]')
+            logger.info(f"Found {len(product_divs)} BlueStone product divs")
+
+            for div in product_divs[:limit]:
                 try:
-                    # Try multiple title selectors
-                    title_el = card.select_one('.product-title, .plp-prod-name, .prod-name, h3, h4, a[title]')
-                    price_el = card.select_one('.product-price, .plp-price, .final-price, .price, [class*="price"]')
-                    img_el = card.select_one('img[src*="bluestone"], img[data-src*="bluestone"], img')
-                    link_el = card.select_one('a[href*="/jewellery/"], a[href*="product"]')
+                    # Get product URL from data-plink
+                    source_url = div.get('data-plink', '')
+                    if not source_url:
+                        continue
 
-                    # Get title from link title attribute if no title element
-                    title = ""
-                    if title_el:
-                        title = title_el.get_text(strip=True) or title_el.get('title', '')
-                    elif link_el:
-                        title = link_el.get('title', '') or link_el.get_text(strip=True)
+                    # Get title from img alt attribute
+                    img = div.select_one('img[alt]')
+                    title = img.get('alt', '') if img else ''
+                    if not title or len(title) < 3:
+                        continue
 
-                    if title and len(title) > 3:  # Valid title
-                        price = extract_price(price_el.get_text() if price_el else "")
-                        image_url = ""
-                        if img_el:
-                            image_url = img_el.get('src') or img_el.get('data-src') or img_el.get('data-lazy') or ""
-                        source_url = link_el.get('href', url) if link_el else url
+                    # Get image URL
+                    image_url = ""
+                    if img:
+                        image_url = img.get('src') or img.get('data-src') or img.get('data-lazy-src') or ""
 
-                        if not source_url.startswith('http'):
-                            source_url = f"https://www.bluestone.com{source_url}"
+                    # Get price from nearby elements
+                    parent = div.find_parent('div', class_=True)
+                    price = None
+                    if parent:
+                        price_el = parent.select_one('.final-price, .our-price, [class*="price"]')
+                        if price_el:
+                            price = extract_price(price_el.get_text())
 
-                        designs.append(ScrapedDesign(
-                            title=title,
-                            price=price,
-                            image_url=image_url,
-                            source_url=source_url,
-                            source='bluestone',
-                            category=detect_category(title)
-                        ))
+                    designs.append(ScrapedDesign(
+                        title=title,
+                        price=price,
+                        image_url=image_url,
+                        source_url=source_url,
+                        source='bluestone',
+                        category=detect_category(title)
+                    ))
                 except Exception as e:
+                    logger.error(f"Error parsing BlueStone product: {e}")
                     continue
 
         logger.info(f"BlueStone: Found {len(designs)} designs")
