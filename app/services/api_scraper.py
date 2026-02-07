@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import httpx
 from bs4 import BeautifulSoup
 
+import os
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -77,8 +78,13 @@ class APIScraperService:
 
     @property
     def api_key(self) -> str:
-        """Get API key dynamically from settings."""
-        return settings.scraper_api_key
+        """Get API key dynamically - check both settings and direct env."""
+        # Try settings first
+        key = settings.scraper_api_key
+        if key:
+            return key
+        # Fallback to direct env check (Railway sometimes has issues with pydantic)
+        return os.environ.get("SCRAPER_API_KEY", "")
 
     @property
     def configured(self) -> bool:
