@@ -72,19 +72,45 @@ _pending_subscribe = {}  # phone_number -> True
 WELCOME_MESSAGE = """👋 *Welcome to JewelClaw!*
 Your AI-powered jewelry industry assistant.
 
-🚀 *First time?* Send: *join third-find*
-
 *Commands:*
 • *gold* - Live gold rates + expert analysis
 • *trends* - Trending jewelry designs
-• *bridal* - Bridal collection
-• *dailywear* - Lightweight designs
-• *lookbook* - Your saved designs
-• *subscribe* - Daily 9 AM brief
-• *help* - Show this menu
+• *subscribe* - Daily 9 AM morning brief
+• *help* - Show all commands
 
 🇮🇳 *Built for Indian Jewelers*
-_Developed by Sandeep Roy_"""
+
+Type *gold* to get started!"""
+
+
+# Onboarding instructions for sharing with new users
+ONBOARDING_GUIDE = """
+━━━━━━━━━━━━━━━━━━━━━━━━
+🏆 *JewelClaw Setup Guide*
+━━━━━━━━━━━━━━━━━━━━━━━━
+
+*Step 1: Save this number*
+📱 +1 (415) 523-8886
+Save as: *JewelClaw*
+
+*Step 2: Send join code*
+Open WhatsApp chat with JewelClaw
+Send this message exactly:
+👉 *join third-find*
+
+*Step 3: You're ready!*
+Send *gold* to get live rates
+Send *subscribe* for daily 9 AM brief
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+*Commands:*
+• gold - Live gold/silver/platinum rates
+• subscribe - Daily morning brief at 9 AM
+• unsubscribe - Stop daily briefs
+• trends - Trending jewelry designs
+• help - All commands
+━━━━━━━━━━━━━━━━━━━━━━━━
+"""
 
 
 async def store_conversation(db: AsyncSession, user_id: int, role: str, message: str):
@@ -685,6 +711,36 @@ async def admin_scrape_designs(db: AsyncSession = Depends(get_db)):
     except Exception as e:
         import traceback
         return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
+
+
+@app.get("/onboarding")
+async def get_onboarding():
+    """Get the onboarding guide text for sharing."""
+    return {
+        "guide": ONBOARDING_GUIDE,
+        "phone": "+1 (415) 523-8886",
+        "join_code": "join third-find",
+        "steps": [
+            "1. Save +1 (415) 523-8886 as 'JewelClaw' in contacts",
+            "2. Open WhatsApp and start chat with JewelClaw",
+            "3. Send: join third-find",
+            "4. Send: gold (to test)",
+            "5. Send: subscribe (for daily 9 AM brief)"
+        ]
+    }
+
+
+@app.get("/admin/send-onboarding/{phone}")
+async def send_onboarding(phone: str):
+    """Send onboarding guide to a phone number."""
+    try:
+        result = await whatsapp_service.send_message(
+            f"whatsapp:{phone}",
+            ONBOARDING_GUIDE
+        )
+        return {"status": "sent" if result else "failed", "phone": phone}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
 
 @app.get("/admin/test-twilio/{phone}")
