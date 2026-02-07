@@ -161,29 +161,52 @@ class APIScraperService:
         for script in soup.find_all('script', type='application/ld+json'):
             try:
                 data = json.loads(script.string)
+                logger.info(f"LD+JSON type: {data.get('@type')}")
+
                 if data.get('@type') == 'Product':
                     designs.append(self._parse_product(data, 'bluestone', url))
                 elif data.get('@type') == 'ItemList':
-                    for item in data.get('itemListElement', [])[:limit]:
+                    items = data.get('itemListElement', [])
+                    logger.info(f"ItemList has {len(items)} items")
+                    for item in items[:limit]:
                         if 'item' in item:
                             designs.append(self._parse_product(item['item'], 'bluestone', url))
-            except:
+                        elif item.get('@type') == 'Product':
+                            designs.append(self._parse_product(item, 'bluestone', url))
+                elif isinstance(data, list):
+                    # Sometimes it's a list of products directly
+                    for item in data[:limit]:
+                        if item.get('@type') == 'Product':
+                            designs.append(self._parse_product(item, 'bluestone', url))
+            except Exception as e:
+                logger.error(f"LD+JSON parse error: {e}")
                 continue
 
-        # Method 2: Parse HTML directly
+        # Method 2: Parse HTML directly - try multiple selectors
         if not designs:
-            cards = soup.select('[data-product-id], .product-card, .plp-card, .product-item')
-            for card in cards[:limit]:
+            # BlueStone specific selectors
+            cards = soup.select('.product-grid-item, .product-box, .plp-product-card, [class*="product"]')
+            logger.info(f"HTML method: found {len(cards)} potential product cards")
+            for card in cards[:limit*2]:  # Check more cards
                 try:
-                    title_el = card.select_one('.product-title, .plp-prod-name, h3, h4')
-                    price_el = card.select_one('.product-price, .plp-price, .final-price')
-                    img_el = card.select_one('img')
-                    link_el = card.select_one('a')
+                    # Try multiple title selectors
+                    title_el = card.select_one('.product-title, .plp-prod-name, .prod-name, h3, h4, a[title]')
+                    price_el = card.select_one('.product-price, .plp-price, .final-price, .price, [class*="price"]')
+                    img_el = card.select_one('img[src*="bluestone"], img[data-src*="bluestone"], img')
+                    link_el = card.select_one('a[href*="/jewellery/"], a[href*="product"]')
 
+                    # Get title from link title attribute if no title element
+                    title = ""
                     if title_el:
-                        title = title_el.get_text(strip=True)
+                        title = title_el.get_text(strip=True) or title_el.get('title', '')
+                    elif link_el:
+                        title = link_el.get('title', '') or link_el.get_text(strip=True)
+
+                    if title and len(title) > 3:  # Valid title
                         price = extract_price(price_el.get_text() if price_el else "")
-                        image_url = img_el.get('src') or img_el.get('data-src') if img_el else ""
+                        image_url = ""
+                        if img_el:
+                            image_url = img_el.get('src') or img_el.get('data-src') or img_el.get('data-lazy') or ""
                         source_url = link_el.get('href', url) if link_el else url
 
                         if not source_url.startswith('http'):
