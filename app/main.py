@@ -1015,9 +1015,14 @@ async def scraper_status():
 
 
 @app.post("/admin/scraper/test/{source}")
-async def test_api_scraper(source: str, category: str = "necklaces", limit: int = 10):
-    """Test API scraper for a specific source."""
+async def test_api_scraper(source: str, category: str = "necklaces", limit: int = 10, api_key: str = None):
+    """Test API scraper for a specific source. Pass api_key param to override."""
     try:
+        # Allow API key override for testing
+        if api_key:
+            import os
+            os.environ["SCRAPER_API_KEY"] = api_key
+
         if source == "bluestone":
             designs = await api_scraper.scrape_bluestone(category=category, limit=limit)
         elif source == "caratlane":
