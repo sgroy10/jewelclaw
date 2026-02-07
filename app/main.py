@@ -1110,18 +1110,30 @@ async def scraper_save_designs(category: str = "necklaces", db: AsyncSession = D
 async def debug_scraper(url: str = "https://www.bluestone.com/jewellery/gold-necklaces.html", api_key: str = None):
     """Debug: See raw ScraperAPI response."""
     import os
+    import re
     if api_key:
         os.environ["SCRAPER_API_KEY"] = api_key
 
     try:
         html = await api_scraper.fetch_rendered_page(url, render_js=True)
         if html:
+            # Count LD+JSON blocks
+            ld_json_count = html.lower().count('application/ld+json')
+            # Find product cards
+            product_card_count = len(re.findall(r'data-product-id', html, re.I))
+            plp_card_count = len(re.findall(r'plp-card|plp-prod', html, re.I))
+            # Look for image URLs
+            image_urls = re.findall(r'https://[^"]*bluestone[^"]*\.(jpg|png|webp)', html, re.I)
+
             return {
                 "status": "success",
                 "html_length": len(html),
-                "html_preview": html[:2000],
-                "contains_product": "product" in html.lower(),
-                "contains_price": "price" in html.lower(),
+                "ld_json_blocks": ld_json_count,
+                "product_cards_data_id": product_card_count,
+                "plp_cards": plp_card_count,
+                "image_urls_found": len(image_urls),
+                "sample_images": image_urls[:5] if image_urls else [],
+                "html_snippet_body": html[html.find('<body'):html.find('<body')+1000] if '<body' in html else "no body tag",
             }
         else:
             return {"status": "failed", "html": None}
