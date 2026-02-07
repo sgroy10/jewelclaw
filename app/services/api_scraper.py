@@ -73,8 +73,12 @@ class APIScraperService:
     """Scraper using ScraperAPI for JavaScript rendering."""
 
     def __init__(self):
-        self.api_key = settings.scraper_api_key
         self.base_url = "http://api.scraperapi.com"
+
+    @property
+    def api_key(self) -> str:
+        """Get API key dynamically from settings."""
+        return settings.scraper_api_key
 
     @property
     def configured(self) -> bool:
