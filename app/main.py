@@ -770,23 +770,27 @@ async def fix_designs_schema():
 
 @app.post("/admin/boost-images")
 async def boost_images():
-    """Boost trending_score for designs with images so they show first."""
+    """Boost trending_score for designs with Cloudinary images (JPG) so they show first."""
     from sqlalchemy import text
     from app.database import engine
 
     try:
         async with engine.begin() as conn:
-            # Boost BlueStone (has real images) to 60
+            # Boost designs with Cloudinary URLs (JPG format) to 80
             await conn.execute(text("""
-                UPDATE designs SET trending_score = 60 WHERE source = 'bluestone' AND image_url IS NOT NULL
+                UPDATE designs SET trending_score = 80 WHERE image_url LIKE '%cloudinary%'
             """))
-            # Lower samples without images to 40
+            # Designs with original URLs (webp) get 50
             await conn.execute(text("""
-                UPDATE designs SET trending_score = 40 WHERE image_url IS NULL
+                UPDATE designs SET trending_score = 50 WHERE image_url NOT LIKE '%cloudinary%' AND image_url IS NOT NULL
             """))
-            logger.info("Boosted designs with images")
+            # Designs without images get 30
+            await conn.execute(text("""
+                UPDATE designs SET trending_score = 30 WHERE image_url IS NULL
+            """))
+            logger.info("Boosted Cloudinary designs to top")
 
-        return {"status": "success", "message": "Designs with images boosted to top"}
+        return {"status": "success", "message": "Cloudinary (JPG) designs boosted to top"}
 
     except Exception as e:
         import traceback
