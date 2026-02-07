@@ -229,18 +229,22 @@ class APIScraperService:
         return designs[:limit]
 
     async def scrape_caratlane(self, category: str = "necklaces", limit: int = 20) -> List[ScrapedDesign]:
-        """Scrape designs from CaratLane."""
+        """Scrape designs from CaratLane using their API."""
         designs = []
-        category_urls = {
-            "necklaces": "https://www.caratlane.com/jewellery/necklaces.html",
-            "earrings": "https://www.caratlane.com/jewellery/earrings.html",
-            "rings": "https://www.caratlane.com/jewellery/rings.html",
-            "bangles": "https://www.caratlane.com/jewellery/bangles-bracelets.html",
-            "pendants": "https://www.caratlane.com/jewellery/pendants.html",
-            "bridal": "https://www.caratlane.com/jewellery/wedding-jewellery.html",
+
+        # CaratLane has an internal API we can use
+        category_slugs = {
+            "necklaces": "necklaces",
+            "earrings": "earrings",
+            "rings": "rings",
+            "bangles": "bangles-bracelets",
+            "pendants": "pendants",
+            "bridal": "mangalsutra",
         }
 
-        url = category_urls.get(category, category_urls["necklaces"])
+        slug = category_slugs.get(category, "necklaces")
+        # Try the listing page with JS rendering
+        url = f"https://www.caratlane.com/jewellery/{slug}.html"
         logger.info(f"Scraping CaratLane: {url}")
 
         html = await self.fetch_rendered_page(url, render_js=True)
@@ -249,50 +253,88 @@ class APIScraperService:
 
         soup = BeautifulSoup(html, 'lxml')
 
-        # CaratLane uses data-product-sku and specific classes
-        # Look for product tiles
-        product_tiles = soup.select('[data-product-sku], .product-tile, .plp-product-card, [class*="ProductCard"]')
-        logger.info(f"CaratLane: Found {len(product_tiles)} product tiles")
-
-        for tile in product_tiles[:limit]:
+        # Method 1: Try LD+JSON ItemList
+        for script in soup.find_all('script', type='application/ld+json'):
             try:
-                # Get title from multiple possible locations
-                title_el = tile.select_one('[class*="product-name"], [class*="ProductName"], h3, h4, a[title]')
-                title = ""
-                if title_el:
-                    title = title_el.get_text(strip=True) or title_el.get('title', '')
-
-                # Get image
-                img = tile.select_one('img[src*="caratlane"], img[data-src*="caratlane"], img')
-                image_url = ""
-                if img:
-                    image_url = img.get('src') or img.get('data-src') or img.get('data-lazy') or ""
-
-                # Get price
-                price_el = tile.select_one('[class*="price"], [class*="Price"]')
-                price = extract_price(price_el.get_text() if price_el else "")
-
-                # Get link
-                link = tile.select_one('a[href*="/jewellery/"]')
-                source_url = link.get('href', url) if link else url
-                if not source_url.startswith('http'):
-                    source_url = f"https://www.caratlane.com{source_url}"
-
-                if title and len(title) > 3:
-                    designs.append(ScrapedDesign(
-                        title=title,
-                        price=price,
-                        image_url=image_url,
-                        source_url=source_url,
-                        source='caratlane',
-                        category=detect_category(title)
-                    ))
-            except Exception as e:
-                logger.error(f"CaratLane parse error: {e}")
+                data = json.loads(script.string)
+                if data.get('@type') == 'ItemList':
+                    items = data.get('itemListElement', [])
+                    for item in items[:limit]:
+                        product = item.get('item', item)
+                        if product.get('@type') == 'Product':
+                            designs.append(self._parse_product(product, 'caratlane', url))
+            except:
                 continue
 
-        logger.info(f"CaratLane: Found {len(designs)} designs")
-        return designs[:limit]
+        # Method 2: Parse product cards with various selectors
+        if not designs:
+            # CaratLane uses React, look for data attributes
+            selectors = [
+                'div[data-insights-object-id]',  # Algolia search results
+                'a[href*="/jewellery/"][href$=".html"]',  # Product links
+                'div[class*="product"]',
+                'article[class*="product"]',
+            ]
+
+            for selector in selectors:
+                elements = soup.select(selector)
+                if elements:
+                    logger.info(f"CaratLane: Found {len(elements)} elements with {selector}")
+                    break
+
+            for el in elements[:limit * 2]:  # Get more to filter
+                try:
+                    # Try to find product info
+                    link = el if el.name == 'a' else el.select_one('a[href*="/jewellery/"]')
+                    if not link:
+                        continue
+
+                    href = link.get('href', '')
+                    if not href or '/jewellery/' not in href:
+                        continue
+
+                    source_url = href if href.startswith('http') else f"https://www.caratlane.com{href}"
+
+                    # Get image
+                    img = el.select_one('img')
+                    image_url = ""
+                    if img:
+                        image_url = img.get('src') or img.get('data-src') or ""
+
+                    # Get title from link text, img alt, or URL
+                    title = link.get('title') or link.get_text(strip=True)
+                    if not title and img:
+                        title = img.get('alt', '')
+                    if not title:
+                        # Extract from URL: /jewellery/the-xxx-necklace-xxx.html
+                        title = href.split('/')[-1].replace('.html', '').replace('-', ' ').title()
+
+                    # Get price
+                    price_el = el.select_one('[class*="price"], span[class*="Price"]')
+                    price = extract_price(price_el.get_text() if price_el else "")
+
+                    if title and len(title) > 5 and image_url:
+                        designs.append(ScrapedDesign(
+                            title=title[:100],
+                            price=price,
+                            image_url=image_url,
+                            source_url=source_url,
+                            source='caratlane',
+                            category=detect_category(title)
+                        ))
+                except Exception as e:
+                    continue
+
+        # Deduplicate by URL
+        seen_urls = set()
+        unique_designs = []
+        for d in designs:
+            if d.source_url not in seen_urls:
+                seen_urls.add(d.source_url)
+                unique_designs.append(d)
+
+        logger.info(f"CaratLane: Found {len(unique_designs)} unique designs")
+        return unique_designs[:limit]
 
     async def scrape_tanishq(self, category: str = "necklaces", limit: int = 20) -> List[ScrapedDesign]:
         """Scrape designs from Tanishq."""
@@ -315,55 +357,98 @@ class APIScraperService:
 
         soup = BeautifulSoup(html, 'lxml')
 
-        # Tanishq uses product-tile class and data-pid
-        product_tiles = soup.select('.product-tile, [data-pid], .product-grid-item')
-        logger.info(f"Tanishq: Found {len(product_tiles)} product tiles")
-
-        for tile in product_tiles[:limit]:
+        # Method 1: Try LD+JSON
+        for script in soup.find_all('script', type='application/ld+json'):
             try:
-                # Get product ID
-                pid = tile.get('data-pid', '')
-
-                # Get title
-                title_el = tile.select_one('.pdp-link, .product-name, .tile-body a, h3')
-                title = ""
-                if title_el:
-                    title = title_el.get_text(strip=True) or title_el.get('title', '')
-
-                # Get image - Tanishq uses tile-image class
-                img = tile.select_one('img.tile-image, img[src*="tanishq"], img')
-                image_url = ""
-                if img:
-                    image_url = img.get('src') or img.get('data-src') or ""
-
-                # Get price
-                price_el = tile.select_one('.sales .value, .product-price, [class*="price"]')
-                price = None
-                if price_el:
-                    price_text = price_el.get('content') or price_el.get_text()
-                    price = extract_price(price_text)
-
-                # Get link
-                link = tile.select_one('a.pdp-link, a[href*="/product/"]')
-                source_url = link.get('href', url) if link else url
-                if not source_url.startswith('http'):
-                    source_url = f"https://www.tanishq.co.in{source_url}"
-
-                if title and len(title) > 3:
-                    designs.append(ScrapedDesign(
-                        title=title,
-                        price=price,
-                        image_url=image_url,
-                        source_url=source_url,
-                        source='tanishq',
-                        category=detect_category(title)
-                    ))
-            except Exception as e:
-                logger.error(f"Tanishq parse error: {e}")
+                data = json.loads(script.string)
+                if data.get('@type') == 'ItemList':
+                    items = data.get('itemListElement', [])
+                    for item in items[:limit]:
+                        product = item.get('item', item)
+                        if product.get('@type') == 'Product':
+                            designs.append(self._parse_product(product, 'tanishq', url))
+                elif isinstance(data, list):
+                    for item in data[:limit]:
+                        if item.get('@type') == 'Product':
+                            designs.append(self._parse_product(item, 'tanishq', url))
+            except:
                 continue
 
-        logger.info(f"Tanishq: Found {len(designs)} designs")
-        return designs[:limit]
+        # Method 2: Parse product tiles with multiple selectors
+        if not designs:
+            selectors = [
+                '.product-tile',
+                '[data-pid]',
+                '.product-grid-item',
+                'div[class*="ProductCard"]',
+                'article[class*="product"]',
+                'a[href*="/product/"]',
+            ]
+
+            elements = []
+            for selector in selectors:
+                elements = soup.select(selector)
+                if elements:
+                    logger.info(f"Tanishq: Found {len(elements)} with {selector}")
+                    break
+
+            for el in elements[:limit]:
+                try:
+                    # Get link
+                    link = el if el.name == 'a' else el.select_one('a[href]')
+                    source_url = url
+                    if link:
+                        href = link.get('href', '')
+                        if href:
+                            source_url = href if href.startswith('http') else f"https://www.tanishq.co.in{href}"
+
+                    # Get title
+                    title_el = el.select_one('.pdp-link, .product-name, .tile-body a, h3, h4, [class*="name"]')
+                    title = ""
+                    if title_el:
+                        title = title_el.get_text(strip=True) or title_el.get('title', '')
+
+                    # Get image
+                    img = el.select_one('img')
+                    image_url = ""
+                    if img:
+                        image_url = img.get('src') or img.get('data-src') or img.get('data-lazy-src') or ""
+                        # Convert relative URLs
+                        if image_url.startswith('//'):
+                            image_url = 'https:' + image_url
+                        elif image_url.startswith('/'):
+                            image_url = 'https://www.tanishq.co.in' + image_url
+
+                    # Get price
+                    price_el = el.select_one('.sales .value, .product-price, [class*="price"], span[content]')
+                    price = None
+                    if price_el:
+                        price_text = price_el.get('content') or price_el.get_text()
+                        price = extract_price(price_text)
+
+                    if title and len(title) > 3:
+                        designs.append(ScrapedDesign(
+                            title=title,
+                            price=price,
+                            image_url=image_url,
+                            source_url=source_url,
+                            source='tanishq',
+                            category=detect_category(title)
+                        ))
+                except Exception as e:
+                    logger.error(f"Tanishq parse error: {e}")
+                    continue
+
+        # Deduplicate
+        seen_urls = set()
+        unique_designs = []
+        for d in designs:
+            if d.source_url not in seen_urls:
+                seen_urls.add(d.source_url)
+                unique_designs.append(d)
+
+        logger.info(f"Tanishq: Found {len(unique_designs)} unique designs")
+        return unique_designs[:limit]
 
     def _parse_product(self, data: dict, source: str, fallback_url: str) -> ScrapedDesign:
         """Parse LD+JSON product data."""
