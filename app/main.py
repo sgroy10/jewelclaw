@@ -1125,15 +1125,31 @@ async def debug_scraper(url: str = "https://www.bluestone.com/jewellery/gold-nec
             # Look for image URLs
             image_urls = re.findall(r'https://[^"]*bluestone[^"]*\.(jpg|png|webp)', html, re.I)
 
+            # Find a product section
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, 'lxml')
+
+            # Find LD+JSON content
+            ld_json_content = None
+            for script in soup.find_all('script', type='application/ld+json'):
+                try:
+                    ld_json_content = script.string[:500] if script.string else None
+                    break
+                except:
+                    pass
+
+            # Find product elements
+            product_divs = soup.select('[class*="product"]')[:3]
+            product_samples = [str(div)[:300] for div in product_divs]
+
             return {
                 "status": "success",
                 "html_length": len(html),
                 "ld_json_blocks": ld_json_count,
-                "product_cards_data_id": product_card_count,
-                "plp_cards": plp_card_count,
+                "ld_json_preview": ld_json_content,
+                "product_divs_found": len(soup.select('[class*="product"]')),
+                "product_samples": product_samples,
                 "image_urls_found": len(image_urls),
-                "sample_images": image_urls[:5] if image_urls else [],
-                "html_snippet_body": html[html.find('<body'):html.find('<body')+1000] if '<body' in html else "no body tag",
             }
         else:
             return {"status": "failed", "html": None}
