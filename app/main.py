@@ -1002,8 +1002,12 @@ async def get_conversations(phone: str, limit: int = 10, db: AsyncSession = Depe
 @app.get("/admin/scraper/status")
 async def scraper_status():
     """Check all scraper statuses."""
+    import os
     return {
         "api_scraper_configured": api_scraper.configured,
+        "api_key_from_settings": bool(settings.scraper_api_key),
+        "api_key_from_env": bool(os.environ.get("SCRAPER_API_KEY")),
+        "api_key_length": len(settings.scraper_api_key) if settings.scraper_api_key else 0,
         "cloudinary_configured": image_service.configured,
         "playwright_available": PLAYWRIGHT_AVAILABLE,
         "browser_running": playwright_scraper.browser is not None if PLAYWRIGHT_AVAILABLE else False,
