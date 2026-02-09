@@ -67,6 +67,17 @@ COMMANDS = {
     # Live search (Playwright)
     "search": "search",
     "find": "search",
+
+    # Trend menu options (1-6)
+    "1": "1",
+    "2": "2",
+    "3": "3",
+    "4": "4",
+    "5": "5",
+    "6": "6",
+    "fresh": "1",
+    "today": "1",
+    "news": "6",
 }
 
 
