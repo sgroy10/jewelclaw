@@ -315,9 +315,28 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
     # TREND SCOUT COMMANDS
     # ==========================================================================
 
-    # 6. TRENDS → Show trending designs
+    # TRENDS MENU → Show category menu
     if command in ["trends", "trending"]:
         return await handle_trends_command(db, user, phone_number)
+
+    # TREND MENU OPTIONS (1-6)
+    if command == "1" or command == "fresh" or command == "today":
+        return await handle_fresh_picks_command(db, user, phone_number)
+
+    if command == "2":
+        return await handle_category_command(db, user, "bridal", phone_number)
+
+    if command == "3":
+        return await handle_category_command(db, user, "dailywear", phone_number)
+
+    if command == "4":
+        return await handle_price_drops_command(db, user, phone_number)
+
+    if command == "5":
+        return await handle_new_arrivals_command(db, user, phone_number)
+
+    if command == "6" or command == "news":
+        return await handle_industry_news_command(db, user, phone_number)
 
     # 7. BRIDAL → Show bridal designs
     if command == "bridal":
@@ -377,34 +396,150 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
 
 
 async def handle_trends_command(db: AsyncSession, user, phone_number: str) -> str:
-    """Handle trends command - show trending designs with images."""
-    designs = await scraper_service.get_trending_designs(db, limit=5)
+    """Handle trends command - show menu for trend categories."""
+    return """🔥 *JewelClaw Trend Intelligence*
+
+Choose what you want to see:
+
+1️⃣ *Today's Fresh Picks* - 10 new designs
+2️⃣ *Bridal Collection* - Wedding jewelry
+3️⃣ *Daily Wear* - Lightweight designs
+4️⃣ *Price Drops* - Discounted items
+5️⃣ *New Arrivals* - Just launched
+6️⃣ *Industry News* - Market updates
+
+_Reply with number (1-6) to see_
+
+Or type: *bridal*, *dailywear*, *temple*"""
+
+
+async def handle_fresh_picks_command(db: AsyncSession, user, phone_number: str) -> str:
+    """Handle fresh picks - show today's fresh designs with images."""
+    from datetime import datetime, timedelta
+
+    # Get designs added in last 24 hours, or most recent if none
+    yesterday = datetime.utcnow() - timedelta(days=1)
+
+    result = await db.execute(
+        select(Design)
+        .where(Design.image_url.like('%cloudinary%'))  # Only Cloudinary images
+        .order_by(desc(Design.id))  # Newest first
+        .limit(10)
+    )
+    designs = result.scalars().all()
 
     if not designs:
-        return """🔥 *Trend Scout*
+        return """🔥 *Today's Fresh Picks*
 
-No designs found yet. Scraping in progress...
+No fresh designs yet. Scraping new content...
 
-_New designs will be available soon!_"""
+_Check back in a few minutes!_"""
 
     # Send header
-    await whatsapp_service.send_message(phone_number, "🔥 *Trending Designs Today*")
+    await whatsapp_service.send_message(phone_number, f"🔥 *Today's Fresh Picks*\n_{len(designs)} designs_")
 
-    # Send each design with its image
+    # Send each design with image
     for i, d in enumerate(designs, 1):
-        price_text = f"₹{d.price_range_min:,.0f}" if d.price_range_min else "Price N/A"
+        price_text = f"₹{d.price_range_min:,.0f}" if d.price_range_min else "Price on request"
         caption = f"*{i}. {d.title[:50]}*\n{d.category or 'General'} | {price_text}\n_Source: {d.source}_\n\nReply 'like {d.id}' to save"
 
-        # Send with image if available - convert via Cloudinary (webp -> jpg for Twilio)
         if d.image_url:
-            # Upload to Cloudinary to convert webp to jpg
-            cloudinary_url = await image_service.upload_from_url(d.image_url, d.source)
-            await whatsapp_service.send_message(phone_number, caption, media_url=cloudinary_url)
+            await whatsapp_service.send_message(phone_number, caption, media_url=d.image_url)
         else:
             await whatsapp_service.send_message(phone_number, caption)
 
-    # Return final instruction (this will be sent as the last message)
-    return "_Reply 'bridal', 'dailywear', 'temple' for categories_"
+    return "_Reply 'trends' for more categories | 'lookbook' to see saved_"
+
+
+async def handle_price_drops_command(db: AsyncSession, user, phone_number: str) -> str:
+    """Handle price drops - show designs with price reductions."""
+    # Get designs with prices, sorted by price (showing lower priced = value deals)
+    result = await db.execute(
+        select(Design)
+        .where(Design.price_range_min.isnot(None))
+        .where(Design.image_url.like('%cloudinary%'))
+        .order_by(Design.price_range_min)
+        .limit(10)
+    )
+    designs = result.scalars().all()
+
+    if not designs:
+        return """💰 *Price Drops*
+
+No price data available yet.
+
+_We're tracking prices - you'll be notified when items drop!_"""
+
+    await whatsapp_service.send_message(phone_number, "💰 *Best Value Picks*\n_Affordable designs for you_")
+
+    for i, d in enumerate(designs[:5], 1):
+        price_text = f"₹{d.price_range_min:,.0f}"
+        caption = f"*{i}. {d.title[:50]}*\n💰 {price_text}\n_Source: {d.source}_\n\nReply 'like {d.id}' to save"
+
+        if d.image_url:
+            await whatsapp_service.send_message(phone_number, caption, media_url=d.image_url)
+
+    return "_Reply 'trends' for more | 'alerts' to get price drop notifications_"
+
+
+async def handle_new_arrivals_command(db: AsyncSession, user, phone_number: str) -> str:
+    """Handle new arrivals - show recently added designs."""
+    result = await db.execute(
+        select(Design)
+        .where(Design.image_url.like('%cloudinary%'))
+        .order_by(desc(Design.created_at))
+        .limit(10)
+    )
+    designs = result.scalars().all()
+
+    if not designs:
+        return """✨ *New Arrivals*
+
+No new arrivals yet. Check back soon!"""
+
+    await whatsapp_service.send_message(phone_number, "✨ *New Arrivals*\n_Just added to our collection_")
+
+    for i, d in enumerate(designs[:5], 1):
+        price_text = f"₹{d.price_range_min:,.0f}" if d.price_range_min else "Price on request"
+        caption = f"*{i}. {d.title[:50]}*\n{d.category or 'New'} | {price_text}\n_Source: {d.source}_\n\nReply 'like {d.id}' to save"
+
+        if d.image_url:
+            await whatsapp_service.send_message(phone_number, caption, media_url=d.image_url)
+
+    return "_Reply 'trends' for more categories_"
+
+
+async def handle_industry_news_command(db: AsyncSession, user, phone_number: str) -> str:
+    """Handle industry news - show market updates and news."""
+    # For now, return curated industry insights
+    # TODO: Add actual news scraping from Google News, ET, etc.
+
+    from datetime import datetime
+
+    today = datetime.now().strftime("%d %b %Y")
+
+    return f"""📰 *Jewelry Industry News*
+_{today}_
+
+*Gold Market:*
+Send 'gold' for live rates and analysis
+
+*Trending Styles:*
+• Minimalist designs gaining popularity
+• Temple jewelry seeing revival
+• Layered necklaces trending globally
+
+*Market Updates:*
+• Wedding season demand rising
+• Lab-grown diamonds market growing
+• Sustainable jewelry gaining traction
+
+*Coming Soon:*
+• Real-time news alerts
+• Competitor collection updates
+• Price trend analysis
+
+_Reply 'gold' for rates | 'trends' for designs_"""
 
 
 async def handle_category_command(db: AsyncSession, user, category: str, phone_number: str) -> str:

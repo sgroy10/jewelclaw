@@ -13,6 +13,8 @@ from app.database import get_db_session
 from app.services.gold_service import metal_service
 from app.services.whatsapp_service import whatsapp_service
 from app.services.scraper_service import scraper_service
+from app.services.api_scraper import api_scraper
+from app.services.image_service import image_service
 
 logger = logging.getLogger(__name__)
 
@@ -191,25 +193,80 @@ class SchedulerService:
             logger.error(f"Error in rate scraping job: {e}")
 
     async def scrape_designs(self):
-        """Scrape jewelry designs from competitors (6 AM daily)."""
+        """Scrape jewelry designs from all sources (6 AM daily)."""
+        from sqlalchemy import select
+        from app.models import Design
+
         logger.info("=" * 50)
-        logger.info("STARTING TREND SCOUT - DESIGN SCRAPING")
+        logger.info("STARTING 6 AM FRESH SCRAPE - TREND SCOUT")
         logger.info("=" * 50)
 
         try:
             async with get_db_session() as db:
-                results = await scraper_service.scrape_all(db)
+                total_saved = 0
+                sources_results = {}
+
+                # Scrape multiple categories for variety
+                categories = ["necklaces", "earrings", "bangles", "rings"]
+
+                for category in categories:
+                    try:
+                        logger.info(f"Scraping {category}...")
+
+                        # Use API scraper with Pinterest
+                        designs = await api_scraper.scrape_all_with_pinterest(
+                            category=category,
+                            limit_per_site=8
+                        )
+
+                        saved_count = 0
+                        for design in designs:
+                            # Check if already exists
+                            existing = await db.execute(
+                                select(Design).where(Design.source_url == design.source_url)
+                            )
+                            if existing.scalar_one_or_none():
+                                continue
+
+                            # Upload image to Cloudinary for WhatsApp compatibility
+                            cloudinary_url = design.image_url
+                            if image_service.configured and design.image_url:
+                                try:
+                                    cloudinary_url = await image_service.upload_from_url(
+                                        design.image_url, design.source
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"Cloudinary upload failed: {e}")
+
+                            # Save to database with high score for fresh content
+                            db_design = Design(
+                                source=design.source,
+                                source_url=design.source_url,
+                                image_url=cloudinary_url,
+                                title=design.title,
+                                category=design.category or category,
+                                metal_type=design.metal_type,
+                                price_range_min=design.price,
+                                trending_score=85  # High score for fresh daily scrape
+                            )
+                            db.add(db_design)
+                            saved_count += 1
+
+                        sources_results[category] = saved_count
+                        total_saved += saved_count
+                        logger.info(f"  {category}: {saved_count} new designs saved")
+
+                    except Exception as e:
+                        logger.error(f"Error scraping {category}: {e}")
+                        sources_results[category] = 0
+
                 await db.commit()
 
-                logger.info(f"Design scraping complete:")
-                logger.info(f"  BlueStone: {results['bluestone']} designs")
-                logger.info(f"  CaratLane: {results['caratlane']} designs")
-                logger.info(f"  Pinterest: {results['pinterest']} designs")
-                logger.info(f"  TOTAL: {results['total']} new designs")
-
-                if results.get('errors'):
-                    for error in results['errors']:
-                        logger.warning(f"  Error: {error}")
+                logger.info("=" * 50)
+                logger.info(f"6 AM SCRAPE COMPLETE: {total_saved} total new designs")
+                for cat, count in sources_results.items():
+                    logger.info(f"  {cat}: {count}")
+                logger.info("=" * 50)
 
         except Exception as e:
             logger.error(f"Error in design scraping job: {e}")
