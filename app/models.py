@@ -292,3 +292,66 @@ class TrendReport(Base):
     source_stats = Column(JSON, default={})  # {"bluestone": 25, "caratlane": 18, "tanishq": 12}
 
     created_at = Column(DateTime, server_default=func.now())
+
+
+# =============================================================================
+# EMAIL INTELLIGENCE MODELS
+# =============================================================================
+
+class EmailSummary(Base):
+    """Summaries of user emails (not full content, for privacy)."""
+
+    __tablename__ = "email_summaries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Gmail metadata
+    gmail_message_id = Column(String(100), unique=True, nullable=False)
+    sender = Column(String(200), nullable=False)
+    subject = Column(String(500), nullable=True)
+
+    # AI-categorized fields
+    category = Column(String(50), nullable=True)  # customer_inquiry, supplier_quote, gold_alert, invoice, order_update, newsletter, spam, other
+    extracted_amount = Column(Float, nullable=True)  # Any monetary amount mentioned
+    urgency = Column(String(20), default="medium")  # high, medium, low
+
+    # Summary
+    summary_text = Column(Text, nullable=True)  # AI-generated summary (NOT full email)
+
+    # Action tracking
+    needs_reply = Column(Boolean, default=False)
+    suggested_reply = Column(Text, nullable=True)
+    read_status = Column(Boolean, default=False)
+
+    # Timestamps
+    received_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_email_user_category", "user_id", "category"),
+        Index("idx_email_user_urgency", "user_id", "urgency"),
+        Index("idx_email_received", "received_at"),
+    )
+
+    def __repr__(self):
+        return f"<EmailSummary {self.id} - {self.subject[:30] if self.subject else 'No subject'}>"
+
+
+class EmailConnection(Base):
+    """Gmail OAuth connections for users."""
+
+    __tablename__ = "email_connections"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    gmail_refresh_token = Column(Text, nullable=False)
+    gmail_email = Column(String(200), nullable=True)
+
+    connected_at = Column(DateTime, server_default=func.now())
+    is_active = Column(Boolean, default=True)
+
+    __table_args__ = (
+        Index("idx_email_conn_user_active", "user_id", "is_active"),
+    )

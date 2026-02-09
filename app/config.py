@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     # ScraperAPI (for JavaScript-rendered scraping)
     scraper_api_key: str = Field(default="")
 
+    # Gmail OAuth (Email Intelligence)
+    google_client_id: str = Field(default="")
+    google_client_secret: str = Field(default="")
+    google_redirect_uri: str = Field(default="")  # e.g. https://your-app.railway.app/auth/gmail/callback
+    app_base_url: str = Field(default="")  # e.g. https://your-app.railway.app
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
