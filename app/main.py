@@ -97,6 +97,113 @@ async def health_check():
 # GMAIL OAUTH CALLBACK
 # =============================================================================
 
+@app.get("/auth/gmail/start")
+async def gmail_oauth_start(uid: str = None):
+    """Intermediary landing page for Gmail OAuth.
+
+    WhatsApp's in-app browser blocks Google OAuth, so we serve an HTML page
+    that instructs the user to open the link in Chrome/Safari.
+    """
+    from fastapi.responses import HTMLResponse
+
+    if not uid:
+        return HTMLResponse("<h2>Invalid link</h2>", status_code=400)
+
+    try:
+        import base64, json
+        state_data = json.loads(base64.urlsafe_b64decode(uid).decode())
+        user_id = state_data.get("user_id")
+        if not user_id:
+            return HTMLResponse("<h2>Invalid link</h2>", status_code=400)
+    except Exception:
+        return HTMLResponse("<h2>Invalid link</h2>", status_code=400)
+
+    auth_url = gmail_service.get_auth_url(user_id)
+    if not auth_url:
+        return HTMLResponse("<h2>Gmail not configured</h2>", status_code=500)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JewelClaw - Connect Gmail</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+               background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+               min-height: 100vh; display: flex; align-items: center; justify-content: center;
+               padding: 20px; color: #fff; }}
+        .card {{ background: #fff; border-radius: 20px; padding: 40px 30px;
+                max-width: 420px; width: 100%; text-align: center; color: #333;
+                box-shadow: 0 20px 60px rgba(0,0,0,0.3); }}
+        .logo {{ font-size: 28px; font-weight: 700; color: #d4a574; margin-bottom: 8px; }}
+        .subtitle {{ color: #888; font-size: 14px; margin-bottom: 30px; }}
+        .gmail-icon {{ font-size: 48px; margin-bottom: 15px; }}
+        h2 {{ font-size: 20px; margin-bottom: 10px; color: #222; }}
+        .desc {{ color: #666; font-size: 14px; line-height: 1.6; margin-bottom: 25px; }}
+        .btn {{ display: block; width: 100%; padding: 16px; background: #4285f4;
+               color: #fff; text-decoration: none; border-radius: 12px; font-size: 16px;
+               font-weight: 600; transition: background 0.2s; }}
+        .btn:hover {{ background: #3367d6; }}
+        .warning {{ background: #fff3cd; border: 1px solid #ffc107; border-radius: 10px;
+                   padding: 12px; margin-bottom: 20px; font-size: 13px; color: #856404; }}
+        .steps {{ text-align: left; margin: 20px 0; font-size: 13px; color: #666; line-height: 2; }}
+        .check {{ color: #28a745; margin-right: 6px; }}
+        .cross {{ color: #dc3545; margin-right: 6px; }}
+        .footer {{ margin-top: 25px; font-size: 12px; color: #aaa; }}
+        .copy-box {{ background: #f5f5f5; border-radius: 8px; padding: 10px;
+                    margin: 15px 0; word-break: break-all; font-size: 11px; color: #555;
+                    display: none; }}
+        #inapp-warning {{ display: none; }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="logo">JewelClaw</div>
+        <div class="subtitle">Email Intelligence</div>
+        <div class="gmail-icon">📧</div>
+        <h2>Connect Your Gmail</h2>
+        <p class="desc">Securely link your Gmail to get AI-powered email summaries, categorization, and reply suggestions in WhatsApp.</p>
+
+        <div id="inapp-warning" class="warning">
+            ⚠️ <strong>WhatsApp browser detected!</strong><br>
+            Tap the <strong>⋮ menu</strong> (top-right) and select <strong>"Open in Chrome"</strong> for this to work.
+        </div>
+
+        <a href="{auth_url}" class="btn" id="auth-btn">
+            🔐 Sign in with Google
+        </a>
+
+        <div class="steps">
+            <div><span class="check">✅</span> Read email summaries only</div>
+            <div><span class="check">✅</span> AI-categorize for your business</div>
+            <div><span class="check">✅</span> Never stores full email content</div>
+            <div><span class="cross">❌</span> Cannot send or delete emails</div>
+        </div>
+
+        <div class="footer">
+            Powered by JewelClaw &bull; Read-only access &bull; Disconnect anytime
+        </div>
+    </div>
+
+    <script>
+        // Detect in-app browsers (WhatsApp, Instagram, Facebook, etc.)
+        var ua = navigator.userAgent || '';
+        var isInApp = /FBAN|FBAV|Instagram|WhatsApp|Line|Snapchat|GSA/i.test(ua);
+        // Also detect generic WebView
+        if (!isInApp) {{
+            isInApp = /wv|WebView/i.test(ua) && /Android/i.test(ua);
+        }}
+        if (isInApp) {{
+            document.getElementById('inapp-warning').style.display = 'block';
+        }}
+    </script>
+</body>
+</html>"""
+    return HTMLResponse(html)
+
+
 @app.get("/auth/gmail/callback")
 async def gmail_oauth_callback(
     code: str = None,
@@ -105,11 +212,30 @@ async def gmail_oauth_callback(
     db: AsyncSession = Depends(get_db),
 ):
     """Handle Gmail OAuth2 callback after user authorizes."""
+    from fastapi.responses import HTMLResponse
+
+    def _result_page(title: str, message: str, success: bool = True) -> HTMLResponse:
+        color = "#28a745" if success else "#dc3545"
+        icon = "✅" if success else "❌"
+        return HTMLResponse(f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JewelClaw - {title}</title>
+<style>body{{font-family:-apple-system,sans-serif;background:#1a1a2e;min-height:100vh;
+display:flex;align-items:center;justify-content:center;padding:20px;color:#fff}}
+.card{{background:#fff;border-radius:20px;padding:40px 30px;max-width:400px;width:100%;
+text-align:center;color:#333;box-shadow:0 20px 60px rgba(0,0,0,.3)}}
+.icon{{font-size:64px;margin-bottom:15px}}h2{{color:{color};margin-bottom:10px}}
+p{{color:#666;line-height:1.6;font-size:14px}}.hint{{margin-top:20px;color:#aaa;font-size:12px}}
+</style></head><body><div class="card"><div class="icon">{icon}</div>
+<h2>{title}</h2><p>{message}</p>
+<p class="hint">You can close this window and go back to WhatsApp.</p>
+</div></body></html>""")
+
     if error:
-        return JSONResponse({"status": "error", "message": f"Authorization denied: {error}"})
+        return _result_page("Authorization Denied", f"Google said: {error}", success=False)
 
     if not code or not state:
-        return JSONResponse({"status": "error", "message": "Missing code or state parameter"})
+        return _result_page("Invalid Request", "Missing parameters. Please try again from WhatsApp.", success=False)
 
     try:
         # Decode state to get user_id
@@ -118,18 +244,18 @@ async def gmail_oauth_callback(
         user_id = state_data.get("user_id")
 
         if not user_id:
-            return JSONResponse({"status": "error", "message": "Invalid state"})
+            return _result_page("Invalid Link", "This authorization link is invalid.", success=False)
 
         # Exchange code for tokens
         tokens = await gmail_service.exchange_code_for_tokens(code)
         if not tokens:
-            return JSONResponse({"status": "error", "message": "Failed to exchange authorization code"})
+            return _result_page("Connection Failed", "Could not complete authorization. Please try again from WhatsApp.", success=False)
 
         refresh_token = tokens.get("refresh_token")
         access_token = tokens.get("access_token")
 
         if not refresh_token:
-            return JSONResponse({"status": "error", "message": "No refresh token received. Try disconnecting and reconnecting."})
+            return _result_page("No Refresh Token", "Google didn't provide a refresh token. Try sending 'connect email' again on WhatsApp.", success=False)
 
         # Get user's email address from Gmail
         import httpx
@@ -154,15 +280,14 @@ async def gmail_oauth_callback(
                 f"✅ *Gmail Connected!*\n\n📧 {gmail_email}\n\nYour emails will now appear in your morning brief.\n\nReply *email* to see your inbox summary now."
             )
 
-        return JSONResponse({
-            "status": "success",
-            "message": f"Gmail connected successfully! ({gmail_email})",
-            "note": "You can close this window. Check WhatsApp for confirmation.",
-        })
+        return _result_page(
+            "Gmail Connected!",
+            f"📧 {gmail_email}<br><br>Your emails will now appear in your morning brief. Check WhatsApp for confirmation!",
+        )
 
     except Exception as e:
         logger.error(f"Gmail OAuth callback error: {e}")
-        return JSONResponse({"status": "error", "message": str(e)})
+        return _result_page("Something Went Wrong", "Please try again from WhatsApp by sending 'connect email'.", success=False)
 
 
 # Simple in-memory deduplication for Twilio retries
@@ -932,27 +1057,32 @@ Gmail integration is not configured yet.
 _The admin needs to set up Google OAuth credentials._
 _Contact your JewelClaw admin._"""
 
-    auth_url = gmail_service.get_auth_url(user.id)
-    if not auth_url:
-        return "Error generating auth link. Please try again."
+    # Build short intermediary URL (avoids long Google OAuth URL in WhatsApp)
+    import base64, json
+    uid = base64.urlsafe_b64encode(
+        json.dumps({"user_id": user.id}).encode()
+    ).decode()
+
+    base_url = settings.app_base_url or settings.google_redirect_uri.rsplit("/auth/", 1)[0] if settings.google_redirect_uri else ""
+    if not base_url:
+        return "Error: APP_BASE_URL not configured. Contact admin."
+
+    start_url = f"{base_url}/auth/gmail/start?uid={uid}"
 
     return f"""📧 *Connect Your Gmail*
 
-Click this link to securely connect your Gmail:
+Open this link in Chrome/Safari:
+{start_url}
 
-{auth_url}
+⚠️ *Important:* Don't open inside WhatsApp.
+Long-press the link → _Open in Chrome_
 
-_What we do:_
+_What we access:_
 ✅ Read email summaries only
-✅ AI-categorize for your jewelry business
-✅ Never store full email content
+✅ AI-categorize for your business
+❌ Cannot send or delete emails
 
-_What we DON'T do:_
-❌ No sending emails on your behalf
-❌ No modifying or deleting emails
-❌ No sharing your data
-
-_After connecting, reply 'email' to see your inbox summary._"""
+_After connecting, reply 'email' to see your inbox._"""
 
 
 async def handle_search_command(db: AsyncSession, user, query: str, phone_number: str) -> str:
