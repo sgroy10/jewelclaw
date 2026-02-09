@@ -15,6 +15,7 @@ from app.services.whatsapp_service import whatsapp_service
 from app.services.scraper_service import scraper_service
 from app.services.api_scraper import api_scraper
 from app.services.image_service import image_service
+from app.services.business_memory_service import business_memory_service
 
 logger = logging.getLogger(__name__)
 
@@ -142,13 +143,28 @@ class SchedulerService:
                             skip_header=True
                         )
 
+                        # AI Agent: Personalized buy/sell threshold insight
+                        threshold_insight = ""
+                        try:
+                            thresholds = await business_memory_service.get_buy_thresholds(db, user.id)
+                            gold_24k = rate.gold_24k if rate else 0
+                            if thresholds.get("buy") and gold_24k:
+                                buy_price = thresholds["buy"]
+                                diff = gold_24k - buy_price
+                                if diff < 0:
+                                    threshold_insight = f"\n\n💡 Gold at ₹{gold_24k:,.0f} - ₹{abs(diff):,.0f} *below* your buy price of ₹{buy_price:,.0f}!\n   Good time to stock up!"
+                                else:
+                                    threshold_insight = f"\n\n📊 Gold at ₹{gold_24k:,.0f} - ₹{diff:,.0f} above your usual ₹{buy_price:,.0f}. Consider waiting."
+                        except Exception as e:
+                            logger.warning(f"Threshold check failed for {user.phone_number}: {e}")
+
                         # Add Trend Scout teaser if there are new designs
                         if new_designs_count > 0:
                             trend_teaser = f"\n\n🔥 *{new_designs_count} new designs* added today!\nReply 'trends' to explore."
                         else:
                             trend_teaser = ""
 
-                        personalized_brief = greeting + brief_body + trend_teaser
+                        personalized_brief = greeting + brief_body + threshold_insight + trend_teaser
 
                         phone = f"whatsapp:{user.phone_number}"
                         sent = await whatsapp_service.send_message(phone, personalized_brief)

@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     # ScraperAPI (for JavaScript-rendered scraping)
     scraper_api_key: str = Field(default="")
 
+    # AI Agent
+    enable_ai_agent: bool = Field(default=True)
+    agent_model: str = Field(default="claude-sonnet-4-5-20250929")
+    classifier_model: str = Field(default="claude-haiku-4-5-20251001")
+    agent_max_tokens: int = Field(default=1024)
+    ai_daily_budget_usd: float = Field(default=10.0)
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

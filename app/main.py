@@ -14,8 +14,9 @@ from sqlalchemy import select, desc, func
 from app.config import settings
 from app.database import init_db, close_db, get_db, reset_db
 # Import models to ensure they're registered with Base.metadata
-from app.models import User, Conversation, MetalRate, Design, UserDesignPreference, Lookbook, PriceHistory, Alert, TrendReport
+from app.models import User, Conversation, MetalRate, Design, UserDesignPreference, Lookbook, PriceHistory, Alert, TrendReport, BusinessMemory, ConversationSummary
 from app.services.whatsapp_service import whatsapp_service
+from app.services.agent_service import agent_service
 from app.services.gold_service import metal_service
 from app.services.scheduler_service import scheduler_service
 from app.services.memory_service import memory_service
@@ -227,10 +228,35 @@ async def whatsapp_webhook(
             logger.info(f"SUBSCRIBED: {phone_number} as '{name}'")
             response = f"✅ Welcome {name}! You'll receive the morning brief at 9 AM IST daily."
         else:
-            # Normal command handling
-            command = whatsapp_service.parse_command(message_body)
-            logger.info(f"COMMAND: {command}")
-            response = await handle_command(db, user, command, phone_number, is_new_user, message_body)
+            # AI Agent routing (with feature flag)
+            if settings.enable_ai_agent:
+                classification, confidence = agent_service.classify_message(message_body)
+                logger.info(f"CLASSIFY: '{classification}' (confidence={confidence})")
+
+                if classification == "ai_conversation":
+                    # AI PATH: natural language -> Claude with tools
+                    logger.info("AI PATH: routing to agent_service")
+                    response = await agent_service.handle_message(db, user, message_body)
+                else:
+                    # FAST PATH: mapped to existing command handler
+                    command = whatsapp_service.parse_command(message_body)
+                    if command:
+                        logger.info(f"FAST PATH: command={command}")
+                        response = await handle_command(db, user, command, phone_number, is_new_user, message_body)
+                    else:
+                        # Classifier found a fuzzy match but parse_command didn't
+                        # For commands needing args (like, skip, search), use normalized message body
+                        fuzzy_cmd = classification
+                        if classification in ("like", "skip", "search"):
+                            fuzzy_cmd = message_body.lower().strip()
+                        logger.info(f"FUZZY PATH: classification={classification}, cmd={fuzzy_cmd}")
+                        response = await handle_command(db, user, fuzzy_cmd, phone_number, is_new_user, message_body)
+            else:
+                # Legacy: original command handling
+                command = whatsapp_service.parse_command(message_body)
+                logger.info(f"COMMAND: {command}")
+                response = await handle_command(db, user, command, phone_number, is_new_user, message_body)
+
             logger.info(f"RESPONSE LENGTH: {len(response) if response else 0}")
 
         # Send response
@@ -391,7 +417,13 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
         name = match.group(1).strip() if match else None
         return await handle_create_lookbook_command(db, user, name)
 
-    # Unknown command → Show welcome message
+    # Unknown command → Route through AI if enabled, else show welcome
+    if settings.enable_ai_agent:
+        try:
+            return await agent_service.handle_message(db, user, message_body)
+        except Exception as e:
+            logger.error(f"AI fallback error: {e}")
+            return WELCOME_MESSAGE
     return WELCOME_MESSAGE
 
 
@@ -1050,6 +1082,82 @@ async def migrate_openclaw():
             logger.info("OpenClaw migration complete")
 
         return {"status": "success", "message": "OpenClaw tables created (price_history, alerts, trend_reports)"}
+
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
+
+
+@app.post("/admin/migrate-ai-agent")
+async def migrate_ai_agent():
+    """Create AI Agent tables (business_memories, conversation_summaries) and extend users."""
+    from sqlalchemy import text
+    from app.database import engine
+
+    try:
+        async with engine.begin() as conn:
+            # Extend users table with AI agent columns
+            for col_sql in [
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS business_type VARCHAR(50)",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS primary_metals JSON",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS primary_categories JSON",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS gold_buy_threshold FLOAT",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS gold_sell_threshold FLOAT",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_personality_notes TEXT",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN DEFAULT FALSE",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS total_ai_interactions INTEGER DEFAULT 0",
+            ]:
+                await conn.execute(text(col_sql))
+
+            # Create business_memories table
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS business_memories (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    category VARCHAR(50) NOT NULL,
+                    key VARCHAR(200) NOT NULL,
+                    value TEXT NOT NULL,
+                    value_numeric FLOAT,
+                    metal_type VARCHAR(30),
+                    jewelry_category VARCHAR(50),
+                    confidence FLOAT DEFAULT 1.0,
+                    source_message_id INTEGER,
+                    extracted_at TIMESTAMP DEFAULT NOW(),
+                    last_referenced_at TIMESTAMP,
+                    is_active BOOLEAN DEFAULT TRUE
+                )
+            """))
+
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_business_memory_user_category
+                ON business_memories(user_id, category)
+            """))
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_business_memory_user_key
+                ON business_memories(user_id, key)
+            """))
+
+            # Create conversation_summaries table
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS conversation_summaries (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    summary_text TEXT NOT NULL,
+                    messages_covered INTEGER DEFAULT 0,
+                    oldest_message_id INTEGER,
+                    newest_message_id INTEGER,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """))
+
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_convsummary_user
+                ON conversation_summaries(user_id)
+            """))
+
+            logger.info("AI Agent migration complete")
+
+        return {"status": "success", "message": "AI Agent tables created (business_memories, conversation_summaries, user columns extended)"}
 
     except Exception as e:
         import traceback

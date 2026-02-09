@@ -5,6 +5,8 @@ Models:
 - User: WhatsApp users and their preferences
 - Conversation: Message history for context
 - MetalRate: Historical gold/silver/platinum rates
+- BusinessMemory: AI agent's learned facts about each user's business
+- ConversationSummary: Compressed conversation history for context window
 """
 
 from datetime import datetime
@@ -45,6 +47,16 @@ class User(Base):
     subscribed_to_morning_brief = Column(Boolean, default=True)
     preferred_city = Column(String(50), default="Mumbai")
 
+    # AI Agent: Business profile
+    business_type = Column(String(50), nullable=True)  # retailer, wholesaler, manufacturer, designer
+    primary_metals = Column(JSON, nullable=True)  # ["gold", "silver"]
+    primary_categories = Column(JSON, nullable=True)  # ["bridal", "dailywear"]
+    gold_buy_threshold = Column(Float, nullable=True)  # INR per gram - alert when gold drops below
+    gold_sell_threshold = Column(Float, nullable=True)  # INR per gram - alert when gold rises above
+    ai_personality_notes = Column(Text, nullable=True)  # Free-text notes about user communication style
+    onboarding_completed = Column(Boolean, default=False)
+    total_ai_interactions = Column(Integer, default=0)
+
     # Metadata
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -55,6 +67,7 @@ class User(Base):
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
     design_preferences = relationship("UserDesignPreference", back_populates="user", cascade="all, delete-orphan")
     lookbooks = relationship("Lookbook", back_populates="user", cascade="all, delete-orphan")
+    business_memories = relationship("BusinessMemory", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User {self.phone_number}>"
@@ -290,5 +303,62 @@ class TrendReport(Base):
 
     # Source breakdown
     source_stats = Column(JSON, default={})  # {"bluestone": 25, "caratlane": 18, "tanishq": 12}
+
+    created_at = Column(DateTime, server_default=func.now())
+
+
+# =============================================================================
+# AI AGENT MODELS
+# =============================================================================
+
+class BusinessMemory(Base):
+    """AI agent's learned facts about each user's jewelry business."""
+
+    __tablename__ = "business_memories"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Categorization
+    category = Column(String(50), nullable=False)  # making_charges, buy_threshold, sell_threshold, supplier, customer_preference, business_fact, inventory, interest, pricing_rule
+    key = Column(String(200), nullable=False)  # e.g. "22k_necklace_making_charge", "preferred_supplier_gold"
+    value = Column(Text, nullable=False)  # Human-readable value: "18%", "Rajesh Jewellers"
+    value_numeric = Column(Float, nullable=True)  # Numeric value if applicable: 18.0, 7000.0
+
+    # Context
+    metal_type = Column(String(30), nullable=True)  # gold, silver, platinum
+    jewelry_category = Column(String(50), nullable=True)  # necklace, ring, bangle, etc.
+    confidence = Column(Float, default=1.0)  # 0-1, how confident we are in this fact
+
+    # Tracking
+    source_message_id = Column(Integer, nullable=True)  # Conversation.id that generated this
+    extracted_at = Column(DateTime, server_default=func.now())
+    last_referenced_at = Column(DateTime, nullable=True)
+    is_active = Column(Boolean, default=True)
+
+    # Relationships
+    user = relationship("User", back_populates="business_memories")
+
+    __table_args__ = (
+        Index("idx_business_memory_user_category", "user_id", "category"),
+        Index("idx_business_memory_user_key", "user_id", "key"),
+    )
+
+    def __repr__(self):
+        return f"<BusinessMemory {self.user_id}: {self.key}={self.value}>"
+
+
+class ConversationSummary(Base):
+    """Compressed conversation history for AI context window management."""
+
+    __tablename__ = "conversation_summaries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    summary_text = Column(Text, nullable=False)
+    messages_covered = Column(Integer, default=0)  # How many messages this summary covers
+    oldest_message_id = Column(Integer, nullable=True)
+    newest_message_id = Column(Integer, nullable=True)
 
     created_at = Column(DateTime, server_default=func.now())

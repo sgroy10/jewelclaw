@@ -1,0 +1,722 @@
+"""
+AI Agent Service - The brain of JewelClaw.
+
+Handles:
+1. Message classification (exact match -> regex -> Haiku fallback)
+2. Claude tool-use orchestration for natural language conversations
+3. Tool definitions and execution for jewelry business operations
+"""
+
+import logging
+import re
+import json
+from datetime import datetime
+from typing import Optional, Tuple, List, Dict, Any
+
+import anthropic
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, desc
+
+from app.config import settings
+from app.models import User, Conversation, BusinessMemory, MetalRate
+from app.services.business_memory_service import business_memory_service
+
+logger = logging.getLogger(__name__)
+
+# Commands that should always use the fast path (from whatsapp_service.py COMMANDS)
+EXACT_COMMANDS = {
+    "gold", "gold rate", "gold rates", "sona",
+    "subscribe", "unsubscribe",
+    "help", "menu", "setup", "onboarding", "start", "join",
+    "trends", "trending", "bridal", "wedding", "dailywear", "daily wear",
+    "lightweight", "temple", "traditional", "mens", "men", "gents",
+    "lookbook", "saved", "favorites",
+    "1", "2", "3", "4", "5", "6", "fresh", "today", "news",
+    "alerts", "pdf", "lookbook pdf", "create pdf",
+}
+
+# Fuzzy patterns that map to existing commands
+FUZZY_PATTERNS = [
+    (r"^(what.?s|whats|show|get|check).*(gold|sona|rate)", "gold_rate"),
+    (r"^gold.*(price|rate|today|now|current)", "gold_rate"),
+    (r"^(kya|kitna|aaj).*(gold|sona|rate|bhav)", "gold_rate"),
+    (r"^(show|get|check).*(trend|design|new)", "trends"),
+    (r"^(bridal|shaadi|wedding).*(design|collection|jewel)", "bridal"),
+    (r"^(daily|office|light).*(wear|jewel|design)", "dailywear"),
+    (r"^(subscribe|daily brief|morning brief)", "subscribe"),
+    (r"^(stop|unsubscribe|no more)", "unsubscribe"),
+    (r"^(help|commands|what can you do)", "help"),
+    (r"^(like|save)\s+\d+", "like"),
+    (r"^(skip)\s+\d+", "skip"),
+    (r"^(search|find)\s+.+", "search"),
+]
+
+# Tool definitions for Claude
+TOOLS = [
+    {
+        "name": "get_gold_rates",
+        "description": "Get current live gold, silver, and platinum rates for a city in India. Returns rates per gram in INR for all karats (24K, 22K, 18K, 14K).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "Indian city name (e.g. Mumbai, Delhi, Pune, Bangalore). Defaults to user's preferred city.",
+                }
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "store_business_fact",
+        "description": "Store a fact about the user's jewelry business that was shared in conversation. Use this whenever the user tells you about their making charges, buy/sell thresholds, suppliers, preferences, inventory, or any business detail. Categories: making_charges, buy_threshold, sell_threshold, supplier, customer_preference, business_fact, inventory, interest, pricing_rule.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": [
+                        "making_charges", "buy_threshold", "sell_threshold",
+                        "supplier", "customer_preference", "business_fact",
+                        "inventory", "interest", "pricing_rule",
+                    ],
+                    "description": "Category of the business fact.",
+                },
+                "key": {
+                    "type": "string",
+                    "description": "Unique key for this fact, e.g. '22k_necklace_making_charge', 'gold_buy_threshold', 'preferred_supplier'.",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "Human-readable value, e.g. '18%', '₹7,000/gm', 'Rajesh Jewellers'.",
+                },
+                "value_numeric": {
+                    "type": "number",
+                    "description": "Numeric value if applicable (e.g. 18.0 for 18%, 7000.0 for ₹7000). Required for thresholds and charges.",
+                },
+                "metal_type": {
+                    "type": "string",
+                    "description": "Metal type if relevant: gold, silver, platinum.",
+                },
+                "jewelry_category": {
+                    "type": "string",
+                    "description": "Jewelry category if relevant: necklace, ring, bangle, earring, bracelet, chain, pendant.",
+                },
+            },
+            "required": ["category", "key", "value"],
+        },
+    },
+    {
+        "name": "calculate_jewelry_quote",
+        "description": "Calculate a customer quote for a jewelry piece using current gold rate and the user's stored making charges. Includes GST (3%).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "weight_grams": {
+                    "type": "number",
+                    "description": "Weight of the jewelry piece in grams.",
+                },
+                "karat": {
+                    "type": "string",
+                    "enum": ["24k", "22k", "18k", "14k"],
+                    "description": "Gold karat purity.",
+                },
+                "jewelry_type": {
+                    "type": "string",
+                    "description": "Type of jewelry: necklace, ring, bangle, earring, etc.",
+                },
+                "making_charge_percent": {
+                    "type": "number",
+                    "description": "Making charge percentage. If not provided, uses stored making charge for this jewelry type.",
+                },
+            },
+            "required": ["weight_grams", "karat"],
+        },
+    },
+    {
+        "name": "search_designs",
+        "description": "Search trending jewelry designs in our database by category, style, or keyword.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "description": "Category to search: bridal, dailywear, temple, mens, contemporary.",
+                },
+                "keyword": {
+                    "type": "string",
+                    "description": "Keyword to search in design titles and descriptions.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results to return (default 5).",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "set_price_alert",
+        "description": "Set a gold price alert for the user. They'll be notified when gold reaches their target price.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_price": {
+                    "type": "number",
+                    "description": "Target gold price per gram in INR (24K rate).",
+                },
+                "direction": {
+                    "type": "string",
+                    "enum": ["below", "above"],
+                    "description": "Alert when price goes 'below' (for buying) or 'above' (for selling).",
+                },
+            },
+            "required": ["target_price", "direction"],
+        },
+    },
+    {
+        "name": "get_business_memory",
+        "description": "Retrieve stored business facts about this user. Use this to recall their making charges, thresholds, preferences, etc. before answering questions.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "description": "Optional category filter: making_charges, buy_threshold, sell_threshold, supplier, customer_preference, business_fact, inventory, interest, pricing_rule.",
+                },
+            },
+            "required": [],
+        },
+    },
+]
+
+
+class AgentService:
+    """AI agent that understands natural language and uses tools."""
+
+    def __init__(self):
+        self._client = None
+
+    @property
+    def client(self) -> anthropic.Anthropic:
+        if self._client is None:
+            self._client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        return self._client
+
+    def classify_message(self, message: str) -> Tuple[Optional[str], float]:
+        """
+        Classify a message into a command or 'ai_conversation'.
+        Returns (classification, confidence).
+
+        Priority:
+        1. Exact command match -> confidence 1.0
+        2. Regex fuzzy match -> confidence 0.9
+        3. Fallback -> 'ai_conversation' with confidence 0.5
+        """
+        normalized = message.lower().strip()
+
+        # 1. Exact match
+        if normalized in EXACT_COMMANDS:
+            return normalized, 1.0
+
+        # Check prefix matches (like "like 5", "search bridal necklace")
+        for cmd in EXACT_COMMANDS:
+            if normalized.startswith(cmd + " "):
+                return cmd, 1.0
+
+        # 2. Fuzzy regex patterns
+        for pattern, command in FUZZY_PATTERNS:
+            if re.search(pattern, normalized, re.IGNORECASE):
+                return command, 0.9
+
+        # 3. Single word greetings
+        if normalized in {"hi", "hello", "hey", "hii", "hiii", "namaste"}:
+            return "greeting", 1.0
+
+        # 4. Everything else -> AI conversation
+        return "ai_conversation", 0.5
+
+    async def handle_message(
+        self,
+        db: AsyncSession,
+        user: User,
+        message: str,
+    ) -> str:
+        """
+        Process a natural language message through Claude with tools.
+        Builds context, calls Claude, executes tool calls, returns response.
+        """
+        try:
+            # Increment AI interaction count
+            user.total_ai_interactions = (user.total_ai_interactions or 0) + 1
+
+            # Build system prompt with user context
+            system_prompt = await self._build_system_prompt(db, user)
+
+            # Get recent conversation history
+            chat_history = await self._get_chat_history(db, user.id, limit=10)
+
+            # Add current message
+            messages = chat_history + [{"role": "user", "content": message}]
+
+            # Call Claude with tools
+            response = await self._call_claude_with_tools(db, user, system_prompt, messages)
+
+            return response
+
+        except anthropic.APIError as e:
+            logger.error(f"Claude API error: {e}")
+            return "I'm having trouble thinking right now. Try again in a moment, or type 'gold' for quick rates."
+        except Exception as e:
+            logger.error(f"Agent error: {e}", exc_info=True)
+            return "Something went wrong. Type 'help' for available commands."
+
+    async def _build_system_prompt(self, db: AsyncSession, user: User) -> str:
+        """Build a personalized system prompt with user context."""
+        name = user.name or "Friend"
+        city = user.preferred_city or "Mumbai"
+
+        # Get business memory
+        memories = await business_memory_service.get_user_memory(db, user.id)
+        memory_text = business_memory_service.format_memory_for_prompt(memories)
+
+        # Get current gold rate for context
+        rate_text = await self._get_current_rate_text(db, city)
+
+        # Check onboarding status
+        onboarding_status = "completed" if user.onboarding_completed else "not yet completed - learn about their business"
+
+        system = f"""You are JewelClaw AI, a smart assistant for Indian jewelry business professionals on WhatsApp.
+
+USER PROFILE:
+- Name: {name}
+- City: {city}
+- Business type: {user.business_type or 'Unknown - ask them'}
+- Onboarding: {onboarding_status}
+- Total interactions: {user.total_ai_interactions or 0}
+
+BUSINESS MEMORY (what you've learned about their business):
+{memory_text}
+
+CURRENT MARKET:
+{rate_text}
+
+RULES:
+1. Keep responses SHORT - this is WhatsApp, not email. Max 3-4 short paragraphs.
+2. Use *bold* for emphasis (WhatsApp markdown). Use ₹ for Indian Rupees.
+3. When user shares business info (making charges, buy prices, suppliers, preferences), ALWAYS use store_business_fact to save it.
+4. For gold rate questions, use get_gold_rates tool to get live data.
+5. For jewelry quotes, use calculate_jewelry_quote with their stored making charges.
+6. Be conversational and friendly, like a knowledgeable industry colleague.
+7. If onboarding is incomplete, naturally ask about their business (type, metals, categories) during conversation.
+8. Give actionable advice - don't just state facts. "Gold is at ₹6,850 - below your buy price, good time to stock up!"
+9. Use Hindi/Hinglish terms naturally when relevant (sona, chandi, making charge, karigari).
+10. When user asks "should I buy", check their buy_threshold against current rate and give clear advice.
+11. Always format numbers with Indian comma separators (₹7,00,000 not ₹700,000 for lakhs).
+12. If the user says something you don't understand or that's not jewelry-related, be helpful but brief."""
+
+        return system
+
+    async def _get_current_rate_text(self, db: AsyncSession, city: str) -> str:
+        """Get a concise text summary of current rates for the system prompt."""
+        result = await db.execute(
+            select(MetalRate)
+            .where(MetalRate.city == city)
+            .order_by(desc(MetalRate.recorded_at))
+            .limit(1)
+        )
+        rate = result.scalar_one_or_none()
+        if not rate:
+            return "Gold rates not yet fetched for today."
+
+        lines = [
+            f"Gold 24K: ₹{rate.gold_24k:,.0f}/gm ({city})",
+            f"Gold 22K: ₹{rate.gold_22k:,.0f}/gm",
+        ]
+        if rate.gold_18k:
+            lines.append(f"Gold 18K: ₹{rate.gold_18k:,.0f}/gm")
+        if rate.silver:
+            lines.append(f"Silver: ₹{rate.silver:,.0f}/gm")
+        if rate.rate_date:
+            lines.append(f"Date: {rate.rate_date}")
+
+        return "\n".join(lines)
+
+    async def _get_chat_history(
+        self, db: AsyncSession, user_id: int, limit: int = 10
+    ) -> List[Dict[str, str]]:
+        """Get recent chat history formatted for Claude messages API."""
+        result = await db.execute(
+            select(Conversation)
+            .where(Conversation.user_id == user_id)
+            .order_by(desc(Conversation.created_at))
+            .limit(limit)
+        )
+        conversations = list(reversed(result.scalars().all()))
+
+        messages = []
+        for conv in conversations:
+            role = "user" if conv.role == "user" else "assistant"
+            messages.append({"role": role, "content": conv.content})
+
+        # Ensure messages alternate and start with user
+        # Claude API requires alternating user/assistant messages
+        cleaned = []
+        last_role = None
+        for msg in messages:
+            if msg["role"] == last_role:
+                # Merge consecutive same-role messages
+                if cleaned:
+                    cleaned[-1]["content"] += "\n" + msg["content"]
+                continue
+            cleaned.append(msg)
+            last_role = msg["role"]
+
+        # Must start with user message
+        if cleaned and cleaned[0]["role"] == "assistant":
+            cleaned = cleaned[1:]
+
+        return cleaned
+
+    async def _call_claude_with_tools(
+        self,
+        db: AsyncSession,
+        user: User,
+        system: str,
+        messages: List[Dict],
+        depth: int = 0,
+    ) -> str:
+        """Call Claude, execute any tool calls, and return final text response."""
+        if depth > 5:
+            return "I got a bit confused. Can you rephrase that?"
+
+        response = self.client.messages.create(
+            model=settings.agent_model,
+            max_tokens=settings.agent_max_tokens,
+            system=system,
+            messages=messages,
+            tools=TOOLS,
+        )
+
+        # Process response content blocks
+        text_parts = []
+        tool_results = []
+
+        for block in response.content:
+            if block.type == "text":
+                text_parts.append(block.text)
+            elif block.type == "tool_use":
+                # Execute the tool
+                tool_result = await self._execute_tool(
+                    db, user, block.name, block.input
+                )
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(tool_result) if isinstance(tool_result, dict) else str(tool_result),
+                })
+
+        # If there were tool calls, send results back to Claude for final response
+        if tool_results and response.stop_reason == "tool_use":
+            # Build the assistant message with all content blocks
+            assistant_content = []
+            for block in response.content:
+                if block.type == "text":
+                    assistant_content.append({"type": "text", "text": block.text})
+                elif block.type == "tool_use":
+                    assistant_content.append({
+                        "type": "tool_use",
+                        "id": block.id,
+                        "name": block.name,
+                        "input": block.input,
+                    })
+
+            messages = messages + [
+                {"role": "assistant", "content": assistant_content},
+                {"role": "user", "content": tool_results},
+            ]
+            return await self._call_claude_with_tools(
+                db, user, system, messages, depth + 1
+            )
+
+        return "\n".join(text_parts) if text_parts else "I'm not sure how to respond to that. Type 'help' for commands."
+
+    async def _execute_tool(
+        self,
+        db: AsyncSession,
+        user: User,
+        tool_name: str,
+        tool_input: Dict[str, Any],
+    ) -> Any:
+        """Execute a tool call and return the result."""
+        logger.info(f"Executing tool: {tool_name} with input: {tool_input}")
+
+        try:
+            if tool_name == "get_gold_rates":
+                return await self._tool_get_gold_rates(db, user, tool_input)
+            elif tool_name == "store_business_fact":
+                return await self._tool_store_business_fact(db, user, tool_input)
+            elif tool_name == "calculate_jewelry_quote":
+                return await self._tool_calculate_quote(db, user, tool_input)
+            elif tool_name == "search_designs":
+                return await self._tool_search_designs(db, user, tool_input)
+            elif tool_name == "set_price_alert":
+                return await self._tool_set_price_alert(db, user, tool_input)
+            elif tool_name == "get_business_memory":
+                return await self._tool_get_business_memory(db, user, tool_input)
+            else:
+                return {"error": f"Unknown tool: {tool_name}"}
+        except Exception as e:
+            logger.error(f"Tool execution error ({tool_name}): {e}", exc_info=True)
+            return {"error": str(e)}
+
+    async def _tool_get_gold_rates(
+        self, db: AsyncSession, user: User, inputs: Dict
+    ) -> Dict:
+        """Get current gold rates."""
+        city = inputs.get("city", user.preferred_city or "Mumbai")
+
+        result = await db.execute(
+            select(MetalRate)
+            .where(MetalRate.city == city)
+            .order_by(desc(MetalRate.recorded_at))
+            .limit(1)
+        )
+        rate = result.scalar_one_or_none()
+
+        if not rate:
+            # Try fetching fresh rates
+            from app.services.gold_service import metal_service
+            rate = await metal_service.get_current_rates(db, city, force_refresh=True)
+
+        if not rate:
+            return {"error": f"Could not fetch rates for {city}"}
+
+        data = {
+            "city": city,
+            "date": rate.rate_date or "Today",
+            "gold_24k": rate.gold_24k,
+            "gold_22k": rate.gold_22k,
+            "gold_18k": rate.gold_18k,
+            "gold_14k": rate.gold_14k,
+            "silver": rate.silver,
+            "platinum": rate.platinum,
+        }
+
+        # Add threshold context if available
+        thresholds = await business_memory_service.get_buy_thresholds(db, user.id)
+        if thresholds["buy"]:
+            diff = rate.gold_24k - thresholds["buy"]
+            data["user_buy_threshold"] = thresholds["buy"]
+            data["vs_buy_threshold"] = round(diff, 0)
+            data["buy_signal"] = "below" if diff < 0 else "above"
+
+        return data
+
+    async def _tool_store_business_fact(
+        self, db: AsyncSession, user: User, inputs: Dict
+    ) -> Dict:
+        """Store a business fact from conversation."""
+        memory = await business_memory_service.store_fact(
+            db=db,
+            user_id=user.id,
+            category=inputs["category"],
+            key=inputs["key"],
+            value=inputs["value"],
+            value_numeric=inputs.get("value_numeric"),
+            metal_type=inputs.get("metal_type"),
+            jewelry_category=inputs.get("jewelry_category"),
+        )
+
+        # Also update User model thresholds for quick access
+        if inputs["category"] == "buy_threshold" and inputs.get("value_numeric"):
+            user.gold_buy_threshold = inputs["value_numeric"]
+        elif inputs["category"] == "sell_threshold" and inputs.get("value_numeric"):
+            user.gold_sell_threshold = inputs["value_numeric"]
+
+        # Update onboarding if we're learning business info
+        if inputs["category"] in ("business_fact", "making_charges") and not user.onboarding_completed:
+            # Check if we have enough info
+            all_memories = await business_memory_service.get_user_memory(db, user.id)
+            if len(all_memories) >= 3:
+                user.onboarding_completed = True
+
+        return {
+            "stored": True,
+            "key": inputs["key"],
+            "value": inputs["value"],
+            "category": inputs["category"],
+        }
+
+    async def _tool_calculate_quote(
+        self, db: AsyncSession, user: User, inputs: Dict
+    ) -> Dict:
+        """Calculate a jewelry quote."""
+        weight = inputs["weight_grams"]
+        karat = inputs["karat"].lower().replace("k", "k")
+        jewelry_type = inputs.get("jewelry_type", "general")
+        making_pct = inputs.get("making_charge_percent")
+
+        # Get current gold rate
+        city = user.preferred_city or "Mumbai"
+        result = await db.execute(
+            select(MetalRate)
+            .where(MetalRate.city == city)
+            .order_by(desc(MetalRate.recorded_at))
+            .limit(1)
+        )
+        rate = result.scalar_one_or_none()
+        if not rate:
+            return {"error": "Could not fetch current gold rates"}
+
+        # Get rate for this karat
+        karat_rates = {
+            "24k": rate.gold_24k,
+            "22k": rate.gold_22k,
+            "18k": rate.gold_18k or 0,
+            "14k": rate.gold_14k or 0,
+        }
+        gold_rate = karat_rates.get(karat, rate.gold_22k)
+
+        # Get making charge from memory if not provided
+        if making_pct is None:
+            memories = await business_memory_service.get_user_memory(
+                db, user.id, category="making_charges"
+            )
+            for m in memories:
+                if jewelry_type.lower() in m.key.lower() and m.value_numeric:
+                    making_pct = m.value_numeric
+                    break
+            # Fallback: check for a general making charge
+            if making_pct is None:
+                for m in memories:
+                    if m.value_numeric:
+                        making_pct = m.value_numeric
+                        break
+
+        if making_pct is None:
+            making_pct = 14.0  # Industry default
+
+        # Calculate
+        gold_cost = weight * gold_rate
+        making_cost = gold_cost * (making_pct / 100)
+        subtotal = gold_cost + making_cost
+        gst = subtotal * 0.03
+        total = subtotal + gst
+
+        return {
+            "weight_grams": weight,
+            "karat": karat,
+            "jewelry_type": jewelry_type,
+            "gold_rate_per_gram": gold_rate,
+            "gold_cost": round(gold_cost, 0),
+            "making_charge_percent": making_pct,
+            "making_cost": round(making_cost, 0),
+            "subtotal": round(subtotal, 0),
+            "gst_3_percent": round(gst, 0),
+            "total": round(total, 0),
+            "city": city,
+        }
+
+    async def _tool_search_designs(
+        self, db: AsyncSession, user: User, inputs: Dict
+    ) -> Dict:
+        """Search designs in the database."""
+        from app.models import Design
+
+        query = select(Design)
+
+        category = inputs.get("category")
+        keyword = inputs.get("keyword")
+        limit = min(inputs.get("limit", 5), 10)
+
+        if category:
+            query = query.where(Design.category == category.lower())
+        if keyword:
+            query = query.where(Design.title.ilike(f"%{keyword}%"))
+
+        query = query.order_by(desc(Design.trending_score)).limit(limit)
+
+        result = await db.execute(query)
+        designs = result.scalars().all()
+
+        return {
+            "count": len(designs),
+            "designs": [
+                {
+                    "id": d.id,
+                    "title": d.title or "Untitled",
+                    "category": d.category,
+                    "price": d.price_range_min,
+                    "source": d.source,
+                    "has_image": bool(d.image_url),
+                }
+                for d in designs
+            ],
+        }
+
+    async def _tool_set_price_alert(
+        self, db: AsyncSession, user: User, inputs: Dict
+    ) -> Dict:
+        """Set a gold price alert."""
+        target = inputs["target_price"]
+        direction = inputs["direction"]
+
+        # Store as business memory
+        if direction == "below":
+            await business_memory_service.store_fact(
+                db=db,
+                user_id=user.id,
+                category="buy_threshold",
+                key="gold_buy_threshold",
+                value=f"₹{target:,.0f}/gm",
+                value_numeric=target,
+                metal_type="gold",
+            )
+            user.gold_buy_threshold = target
+        else:
+            await business_memory_service.store_fact(
+                db=db,
+                user_id=user.id,
+                category="sell_threshold",
+                key="gold_sell_threshold",
+                value=f"₹{target:,.0f}/gm",
+                value_numeric=target,
+                metal_type="gold",
+            )
+            user.gold_sell_threshold = target
+
+        return {
+            "alert_set": True,
+            "target_price": target,
+            "direction": direction,
+            "message": f"Alert set: notify when gold goes {direction} ₹{target:,.0f}/gm",
+        }
+
+    async def _tool_get_business_memory(
+        self, db: AsyncSession, user: User, inputs: Dict
+    ) -> Dict:
+        """Retrieve stored business facts."""
+        category = inputs.get("category")
+        memories = await business_memory_service.get_user_memory(
+            db, user.id, category=category
+        )
+
+        return {
+            "count": len(memories),
+            "facts": [
+                {
+                    "category": m.category,
+                    "key": m.key,
+                    "value": m.value,
+                    "value_numeric": m.value_numeric,
+                    "metal_type": m.metal_type,
+                    "jewelry_category": m.jewelry_category,
+                }
+                for m in memories
+            ],
+        }
+
+
+# Singleton
+agent_service = AgentService()
