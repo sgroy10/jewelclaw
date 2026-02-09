@@ -15,7 +15,6 @@ from app.services.whatsapp_service import whatsapp_service
 from app.services.scraper_service import scraper_service
 from app.services.api_scraper import api_scraper
 from app.services.image_service import image_service
-from app.services.gmail_service import gmail_service
 
 logger = logging.getLogger(__name__)
 
@@ -149,27 +148,7 @@ class SchedulerService:
                         else:
                             trend_teaser = ""
 
-                        # Add Email Intelligence section if Gmail connected
-                        email_section = ""
-                        try:
-                            email_conn = await gmail_service.get_connection(db, user.id)
-                            if email_conn:
-                                await gmail_service.sync_emails(db, user.id, hours=24)
-                                email_stats = await gmail_service.get_email_summary_stats(db, user.id, hours=24)
-                                if email_stats["total"] > 0:
-                                    urgent_emails = await gmail_service.get_emails_by_filter(
-                                        db, user.id, urgency="high", hours=24, limit=3
-                                    )
-                                    reply_emails = await gmail_service.get_emails_by_filter(
-                                        db, user.id, category="customer_inquiry", hours=24, limit=3
-                                    )
-                                    email_section = gmail_service.format_morning_brief_email_section(
-                                        email_stats, urgent_emails, reply_emails
-                                    )
-                        except Exception as e:
-                            logger.warning(f"Email section error for {user.phone_number}: {e}")
-
-                        personalized_brief = greeting + brief_body + trend_teaser + email_section
+                        personalized_brief = greeting + brief_body + trend_teaser
 
                         phone = f"whatsapp:{user.phone_number}"
                         sent = await whatsapp_service.send_message(phone, personalized_brief)

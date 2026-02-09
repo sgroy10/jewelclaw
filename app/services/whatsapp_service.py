@@ -78,18 +78,6 @@ COMMANDS = {
     "fresh": "1",
     "today": "1",
     "news": "6",
-
-    # Email Intelligence commands
-    "email": "email",
-    "mail": "email",
-    "emails": "email",
-    "inbox": "email",
-    "email urgent": "email_urgent",
-    "email suppliers": "email_suppliers",
-    "email customers": "email_customers",
-    "connect email": "connect_email",
-    "connect gmail": "connect_email",
-    "reply": "reply",
 }
 
 

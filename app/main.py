@@ -14,7 +14,7 @@ from sqlalchemy import select, desc, func
 from app.config import settings
 from app.database import init_db, close_db, get_db, reset_db
 # Import models to ensure they're registered with Base.metadata
-from app.models import User, Conversation, MetalRate, Design, UserDesignPreference, Lookbook, PriceHistory, Alert, TrendReport, EmailSummary, EmailConnection
+from app.models import User, Conversation, MetalRate, Design, UserDesignPreference, Lookbook, PriceHistory, Alert, TrendReport
 from app.services.whatsapp_service import whatsapp_service
 from app.services.gold_service import metal_service
 from app.services.scheduler_service import scheduler_service
@@ -26,7 +26,6 @@ from app.services.api_scraper import api_scraper
 from app.services.price_tracker import price_tracker
 from app.services.alerts_service import alerts_service
 from app.services.lookbook_service import lookbook_service
-from app.services.gmail_service import gmail_service
 
 # Configure logging
 logging.basicConfig(
@@ -93,78 +92,6 @@ async def health_check():
     }
 
 
-# =============================================================================
-# GMAIL OAUTH CALLBACK
-# =============================================================================
-
-@app.get("/auth/gmail/callback")
-async def gmail_oauth_callback(
-    code: str = None,
-    state: str = None,
-    error: str = None,
-    db: AsyncSession = Depends(get_db),
-):
-    """Handle Gmail OAuth2 callback after user authorizes."""
-    if error:
-        return JSONResponse({"status": "error", "message": f"Authorization denied: {error}"})
-
-    if not code or not state:
-        return JSONResponse({"status": "error", "message": "Missing code or state parameter"})
-
-    try:
-        # Decode state to get user_id
-        import base64, json
-        state_data = json.loads(base64.urlsafe_b64decode(state).decode())
-        user_id = state_data.get("user_id")
-
-        if not user_id:
-            return JSONResponse({"status": "error", "message": "Invalid state"})
-
-        # Exchange code for tokens
-        tokens = await gmail_service.exchange_code_for_tokens(code)
-        if not tokens:
-            return JSONResponse({"status": "error", "message": "Failed to exchange authorization code"})
-
-        refresh_token = tokens.get("refresh_token")
-        access_token = tokens.get("access_token")
-
-        if not refresh_token:
-            return JSONResponse({"status": "error", "message": "No refresh token received. Try disconnecting and reconnecting."})
-
-        # Get user's email address from Gmail
-        import httpx
-        async with httpx.AsyncClient(timeout=15) as client:
-            profile_resp = await client.get(
-                "https://gmail.googleapis.com/gmail/v1/users/me/profile",
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
-            gmail_email = ""
-            if profile_resp.status_code == 200:
-                gmail_email = profile_resp.json().get("emailAddress", "")
-
-        # Save connection
-        await gmail_service.save_connection(db, user_id, refresh_token, gmail_email)
-        await db.commit()
-
-        # Notify user via WhatsApp
-        user = await db.get(User, user_id)
-        if user:
-            await whatsapp_service.send_message(
-                f"whatsapp:{user.phone_number}",
-                f"✅ *Gmail Connected!*\n\n📧 {gmail_email}\n\nYour emails will now appear in your morning brief.\n\nReply *email* to see your inbox summary now."
-            )
-
-        return JSONResponse({
-            "status": "success",
-            "message": f"Gmail connected successfully! ({gmail_email})",
-            "note": "You can close this window. Check WhatsApp for confirmation.",
-        })
-
-    except Exception as e:
-        logger.error(f"Gmail OAuth callback error: {e}")
-        return JSONResponse({"status": "error", "message": str(e)})
-
-
 # Simple in-memory deduplication for Twilio retries
 _processed_message_sids = set()
 _max_cached_sids = 1000
@@ -184,7 +111,6 @@ Your AI-powered jewelry industry assistant.
 • *lookbook* - View saved designs
 • *pdf* - Generate lookbook PDF
 • *alerts* - View your price drop alerts
-• *email* - Email summary & intelligence
 • *subscribe* - Daily 9 AM morning brief
 • *setup* - How to join JewelClaw
 • *help* - Show this menu
@@ -464,34 +390,6 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
         match = re.search(r'create lookbook\s*(.*)', message_body.lower())
         name = match.group(1).strip() if match else None
         return await handle_create_lookbook_command(db, user, name)
-
-    # ==========================================================================
-    # EMAIL INTELLIGENCE COMMANDS
-    # ==========================================================================
-
-    # EMAIL → Show email summary
-    if command == "email":
-        return await handle_email_command(db, user, phone_number)
-
-    # EMAIL URGENT → Show urgent emails only
-    if command == "email_urgent":
-        return await handle_email_filter_command(db, user, urgency="high", title="⚠️ Urgent Emails")
-
-    # EMAIL SUPPLIERS → Show supplier-related emails
-    if command == "email_suppliers":
-        return await handle_email_filter_command(db, user, category="supplier_quote", title="📊 Supplier Emails")
-
-    # EMAIL CUSTOMERS → Show customer inquiry emails
-    if command == "email_customers":
-        return await handle_email_filter_command(db, user, category="customer_inquiry", title="💬 Customer Inquiries")
-
-    # REPLY [id] → Get AI-suggested reply
-    if command and command.startswith("reply"):
-        return await handle_email_reply_command(db, user, command)
-
-    # CONNECT EMAIL → Start Gmail OAuth flow
-    if command == "connect_email":
-        return await handle_connect_email_command(db, user)
 
     # Unknown command → Show welcome message
     return WELCOME_MESSAGE
@@ -849,112 +747,6 @@ _Reply 'pdf' to generate a PDF of this lookbook_"""
         return "Failed to create lookbook. Try again later."
 
 
-async def handle_email_command(db: AsyncSession, user, phone_number: str) -> str:
-    """Handle email command - show email summary."""
-    conn = await gmail_service.get_connection(db, user.id)
-    if not conn:
-        return """📧 *Email Intelligence*
-
-Gmail not connected yet.
-
-Reply *connect email* to link your Gmail account.
-
-_Once connected, you'll get:_
-• Email summaries in your morning brief
-• AI-categorized inbox view
-• Reply suggestions for customers"""
-
-    # Sync recent emails first
-    await whatsapp_service.send_message(phone_number, "📧 *Syncing your emails...*")
-    new_count, total = await gmail_service.sync_emails(db, user.id, hours=24)
-    await db.commit()
-
-    # Get summary stats
-    stats = await gmail_service.get_email_summary_stats(db, user.id, hours=24)
-    return gmail_service.format_email_summary(stats)
-
-
-async def handle_email_filter_command(
-    db: AsyncSession, user,
-    category: str = None, urgency: str = None, title: str = "📧 Emails"
-) -> str:
-    """Handle filtered email commands (urgent, suppliers, customers)."""
-    conn = await gmail_service.get_connection(db, user.id)
-    if not conn:
-        return "📧 Gmail not connected. Reply *connect email* to link your account."
-
-    emails = await gmail_service.get_emails_by_filter(
-        db, user.id, category=category, urgency=urgency, hours=48, limit=10
-    )
-    return gmail_service.format_email_list(emails, title)
-
-
-async def handle_email_reply_command(db: AsyncSession, user, command: str) -> str:
-    """Handle reply command - generate AI-suggested reply."""
-    import re
-    match = re.search(r'(\d+)', command)
-    if not match:
-        return "Usage: reply [email_id]\nExample: reply 5"
-
-    email_id = int(match.group(1))
-    email = await gmail_service.get_email_by_id(db, email_id, user.id)
-
-    if not email:
-        return f"Email #{email_id} not found. Use 'email' to see your emails."
-
-    reply = await gmail_service.generate_reply_suggestion(email)
-
-    # Store the suggestion
-    email.suggested_reply = reply
-    await db.commit()
-
-    sender_short = email.sender.split("<")[0].strip()[:30]
-    return f"""✉️ *Suggested Reply to #{email_id}*
-
-*To:* {sender_short}
-*Re:* {(email.subject or 'No subject')[:50]}
-
----
-{reply}
----
-
-_Copy and send from your email app._
-_Reply 'email' for more emails._"""
-
-
-async def handle_connect_email_command(db: AsyncSession, user) -> str:
-    """Handle connect email command - start Gmail OAuth flow."""
-    if not gmail_service.configured:
-        return """📧 *Email Intelligence*
-
-Gmail integration is not configured yet.
-
-_The admin needs to set up Google OAuth credentials._
-_Contact your JewelClaw admin._"""
-
-    auth_url = gmail_service.get_auth_url(user.id)
-    if not auth_url:
-        return "Error generating auth link. Please try again."
-
-    return f"""📧 *Connect Your Gmail*
-
-Click this link to securely connect your Gmail:
-
-{auth_url}
-
-_What we do:_
-✅ Read email summaries only
-✅ AI-categorize for your jewelry business
-✅ Never store full email content
-
-_What we DON'T do:_
-❌ No sending emails on your behalf
-❌ No modifying or deleting emails
-❌ No sharing your data
-
-_After connecting, reply 'email' to see your inbox summary._"""
-
-
 async def handle_search_command(db: AsyncSession, user, query: str, phone_number: str) -> str:
     """Handle live search command using API scraper."""
     # Send initial message
@@ -1258,73 +1050,6 @@ async def migrate_openclaw():
             logger.info("OpenClaw migration complete")
 
         return {"status": "success", "message": "OpenClaw tables created (price_history, alerts, trend_reports)"}
-
-    except Exception as e:
-        import traceback
-        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
-
-
-@app.post("/admin/migrate-email")
-async def migrate_email():
-    """Create Email Intelligence tables (email_summaries, email_connections)."""
-    from sqlalchemy import text
-    from app.database import engine
-
-    try:
-        async with engine.begin() as conn:
-            # Create email_summaries table
-            await conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS email_summaries (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-                    gmail_message_id VARCHAR(100) UNIQUE NOT NULL,
-                    sender VARCHAR(200) NOT NULL,
-                    subject VARCHAR(500),
-                    category VARCHAR(50),
-                    extracted_amount FLOAT,
-                    urgency VARCHAR(20) DEFAULT 'medium',
-                    summary_text TEXT,
-                    needs_reply BOOLEAN DEFAULT FALSE,
-                    suggested_reply TEXT,
-                    read_status BOOLEAN DEFAULT FALSE,
-                    received_at TIMESTAMP,
-                    created_at TIMESTAMP DEFAULT NOW()
-                )
-            """))
-
-            await conn.execute(text("""
-                CREATE INDEX IF NOT EXISTS idx_email_user_category
-                ON email_summaries(user_id, category)
-            """))
-            await conn.execute(text("""
-                CREATE INDEX IF NOT EXISTS idx_email_user_urgency
-                ON email_summaries(user_id, urgency)
-            """))
-            await conn.execute(text("""
-                CREATE INDEX IF NOT EXISTS idx_email_received
-                ON email_summaries(received_at)
-            """))
-
-            # Create email_connections table
-            await conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS email_connections (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-                    gmail_refresh_token TEXT NOT NULL,
-                    gmail_email VARCHAR(200),
-                    connected_at TIMESTAMP DEFAULT NOW(),
-                    is_active BOOLEAN DEFAULT TRUE
-                )
-            """))
-
-            await conn.execute(text("""
-                CREATE INDEX IF NOT EXISTS idx_email_conn_user_active
-                ON email_connections(user_id, is_active)
-            """))
-
-            logger.info("Email Intelligence migration complete")
-
-        return {"status": "success", "message": "Email Intelligence tables created (email_summaries, email_connections)"}
 
     except Exception as e:
         import traceback
