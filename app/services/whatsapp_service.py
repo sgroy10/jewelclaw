@@ -15,6 +15,56 @@ from app.models import User, Conversation
 
 logger = logging.getLogger(__name__)
 
+
+def detect_timezone_from_phone(phone: str) -> str:
+    """Detect timezone from phone number country code."""
+    phone = phone.replace("whatsapp:", "").replace("+", "").replace(" ", "").replace("-", "")
+
+    # Country code -> timezone mapping (most common codes)
+    PHONE_TIMEZONE_MAP = [
+        ("91", "Asia/Kolkata"),       # India
+        ("1", "America/New_York"),    # US/Canada (default ET)
+        ("44", "Europe/London"),      # UK
+        ("971", "Asia/Dubai"),        # UAE
+        ("966", "Asia/Riyadh"),       # Saudi Arabia
+        ("65", "Asia/Singapore"),     # Singapore
+        ("60", "Asia/Kuala_Lumpur"),  # Malaysia
+        ("852", "Asia/Hong_Kong"),    # Hong Kong
+        ("61", "Australia/Sydney"),   # Australia
+        ("64", "Pacific/Auckland"),   # New Zealand
+        ("49", "Europe/Berlin"),      # Germany
+        ("33", "Europe/Paris"),       # France
+        ("39", "Europe/Rome"),        # Italy
+        ("81", "Asia/Tokyo"),         # Japan
+        ("86", "Asia/Shanghai"),      # China
+        ("82", "Asia/Seoul"),         # South Korea
+        ("66", "Asia/Bangkok"),       # Thailand
+        ("62", "Asia/Jakarta"),       # Indonesia
+        ("63", "Asia/Manila"),        # Philippines
+        ("92", "Asia/Karachi"),       # Pakistan
+        ("94", "Asia/Colombo"),       # Sri Lanka
+        ("880", "Asia/Dhaka"),        # Bangladesh
+        ("977", "Asia/Kathmandu"),    # Nepal
+        ("974", "Asia/Qatar"),        # Qatar
+        ("968", "Asia/Muscat"),       # Oman
+        ("973", "Asia/Bahrain"),      # Bahrain
+        ("965", "Asia/Kuwait"),       # Kuwait
+        ("254", "Africa/Nairobi"),    # Kenya
+        ("27", "Africa/Johannesburg"),# South Africa
+        ("234", "Africa/Lagos"),      # Nigeria
+        ("7", "Europe/Moscow"),       # Russia
+        ("55", "America/Sao_Paulo"),  # Brazil
+        ("52", "America/Mexico_City"),# Mexico
+    ]
+
+    # Match longest prefix first (e.g., 880 before 88)
+    for prefix, tz in sorted(PHONE_TIMEZONE_MAP, key=lambda x: -len(x[0])):
+        if phone.startswith(prefix):
+            return tz
+
+    return "Asia/Kolkata"  # Default to IST
+
+
 # Command definitions
 COMMANDS = {
     # Greeting commands
@@ -221,7 +271,8 @@ class WhatsAppService:
                 name=name,
                 last_message_at=datetime.now(),
                 message_count=1,
-                subscribed_to_morning_brief=True
+                subscribed_to_morning_brief=True,
+                timezone=detect_timezone_from_phone(phone),
             )
             db.add(user)
             await db.flush()

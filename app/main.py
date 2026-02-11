@@ -1372,12 +1372,17 @@ async def migrate_ai_agent():
 
 @app.post("/admin/migrate-remindgenie")
 async def migrate_remindgenie():
-    """Create RemindGenie tables (reminders)."""
+    """Create RemindGenie tables (reminders) and add timezone to users."""
     from sqlalchemy import text
     from app.database import engine
 
     try:
         async with engine.begin() as conn:
+            # Add timezone column to users
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone VARCHAR(50) DEFAULT 'Asia/Kolkata'"
+            ))
+
             await conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS reminders (
                     id SERIAL PRIMARY KEY,

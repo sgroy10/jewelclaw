@@ -46,6 +46,7 @@ class User(Base):
     )
     subscribed_to_morning_brief = Column(Boolean, default=True)
     preferred_city = Column(String(50), default="Mumbai")
+    timezone = Column(String(50), default="Asia/Kolkata")  # Auto-detected from phone country code
 
     # AI Agent: Business profile
     business_type = Column(String(50), nullable=True)  # retailer, wholesaler, manufacturer, designer
