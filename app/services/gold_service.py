@@ -298,8 +298,9 @@ class MetalService:
             # Convert international spot to INR per gram
             spot_per_gram = (gold_usd_oz * usd_inr) / TROY_OZ_TO_GRAM
 
-            # India retail premium: import duty (~6%) + GST (3%) - discount (~1.2%) = ~7.8%
-            INDIA_PREMIUM = 1.078
+            # India retail premium: import duty + GST + margin = ~6.9%
+            # Calibrated against groww.in and goldpriceindia.com (Feb 2026)
+            INDIA_PREMIUM = 1.069
             gold_24k = round(spot_per_gram * INDIA_PREMIUM)
 
             # Calculate all karats from 24K
