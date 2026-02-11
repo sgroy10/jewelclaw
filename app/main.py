@@ -100,29 +100,216 @@ async def health_check():
 _processed_message_sids = set()
 _max_cached_sids = 1000
 
-# Onboarding instructions - shown when user types "setup"
-ONBOARDING_GUIDE = """🏆 *Invite someone to JewelClaw*
+# ==========================================================================
+# HELP MENU & FEATURE GUIDES
+# ==========================================================================
 
-*Step 1️⃣* Save *+1 (415) 523-8886* as "JewelClaw"
-*Step 2️⃣* Open WhatsApp, start a new chat
-*Step 3️⃣* Send: *join third-find*
+def get_help_menu(name: str = "there") -> str:
+    """Main help menu with numbered features."""
+    return f"""Hey *{name}*! Here's everything I can do for you:
 
-That's it! They'll get a personalized setup.
+*1.* Gold & Market Rates
+*2.* Quick Quote (Instant Billing)
+*3.* RemindGenie (Birthdays & Festivals)
+*4.* Portfolio Tracker (Your Holdings)
+*5.* Price Alerts (Buy/Sell Targets)
+*6.* Trend Scout (Browse Designs)
+*7.* Pricing Engine (Making Charges)
+*8.* Morning Brief (Daily 9 AM Update)
+*9.* Invite a Friend
+*10.* About JewelClaw
 
-_Forward this message to invite jewelers!_"""
+_Type any number (1-10) to learn more!_
+_Or just talk to me naturally - I understand Hindi & English._"""
 
-HELP_MESSAGE = """I'm your AI jewelry assistant. Just talk to me!
+
+FEATURE_GUIDES = {
+    "1": """*Gold & Market Rates*
+
+Just type *gold* and I'll show you:
+- Live 24K, 22K, 18K, 14K rates per gram
+- Silver & platinum rates
+- Daily & weekly price changes
+- Expert market analysis
+
+You can also ask naturally:
+_"What's gold at today?"_
+_"Show me silver rate"_
+_"Gold kitna hai aaj?"_
+
+I update rates every 15 minutes during market hours.""",
+
+    "2": """*Quick Quote - Instant Jewelry Bill*
+
+Tell me the weight, karat, and type - I'll generate a full bill in seconds.
 
 Try saying:
-• "What's gold at today?"
-• "Quote me 20g 22k bangles"
-• "I have 500g gold - track it"
-• "Alert me when gold drops below 7000"
-• "My mom's birthday is 15 March"
-• "Show my portfolio"
-• "remind list"
+_"Quote 10g 22k necklace"_
+_"Quote 5g 18k ring"_
+_"Quote 15g bangle x3"_
 
-I understand natural language - no commands needed."""
+Your bill includes:
+- Gold cost at today's rate
+- Making charges (your custom rates!)
+- Wastage & hallmark charges
+- GST @ 3%
+- Total with per-gram breakdown
+
+Set your own making charges first:
+_"price set necklace 15"_
+_"price set ring 12"_""",
+
+    "3": """*RemindGenie - Never Forget!*
+
+I'll remember every birthday, anniversary & festival for you. Just tell me naturally:
+
+_"My wife's birthday is 1 Nov"_
+_"Daughter birthday 24 July"_
+_"Wedding anniversary 14 Feb"_
+_"Tej birthday my friend 27 Aug"_
+_"Mom birthday 15 March"_
+
+Or use the format:
+*remind add* Mom | Mother | 15 March
+
+What I'll do:
+- Send a greeting at *12:01 AM* on the day
+- Remind you again at *8:00 AM* with a ready-to-send message
+- Suggest gift ideas from trending jewelry!
+
+*More commands:*
+- *remind list* - See all your reminders
+- *remind festivals* - Load 30+ Indian festivals (Diwali, Holi, Raksha Bandhan...)
+- *remind delete [id]* - Remove a reminder""",
+
+    "4": """*Portfolio Tracker - Your Holdings*
+
+Tell me what gold/silver you hold and I'll track its value daily.
+
+Just say:
+_"I have 500g 22K gold"_
+_"I have 2kg silver"_
+_"I hold 100g 24K gold and 5kg silver"_
+
+What you get:
+- Live portfolio value updated every 15 min
+- Daily profit/loss tracking
+- Holdings in your *morning brief* every day
+- *Weekly portfolio report* every Sunday
+
+*Commands:*
+- *portfolio* - See your current holdings & value
+- *clear inventory* - Reset your holdings""",
+
+    "5": """*Price Alerts - Never Miss a Deal*
+
+Set a target price and I'll WhatsApp you the moment gold hits it - even at 2 AM!
+
+Just say:
+_"Alert me when gold drops below 7000"_
+_"Notify me if gold goes above 8000"_
+_"Buy alert at 6500"_
+
+How it works:
+- I check gold every 15 minutes
+- When price crosses your target → instant WhatsApp message
+- Works 24/7, even while you sleep
+
+Perfect for:
+- Buying dips automatically
+- Selling at your target price
+- Tracking market movements""",
+
+    "6": """*Trend Scout - Browse Designs*
+
+I scrape the latest jewelry designs from top brands daily at 6 AM.
+
+*Browse by category:*
+- Type *bridal* - Wedding & engagement pieces
+- Type *dailywear* - Lightweight everyday jewelry
+- Type *temple* - Traditional temple designs
+- Type *mens* - Men's rings, chains, bracelets
+- Type *trends* - See all categories
+
+When you see a design you like:
+- *like [id]* - Save to your lookbook
+- *skip [id]* - Pass on it
+- *lookbook* - See all your saved designs""",
+
+    "7": """*Pricing Engine - Your Making Charges*
+
+Set up your custom making charges, wastage, and hallmark rates. Every quote I generate will use YOUR rates.
+
+*Set making charges:*
+_"price set necklace 15"_ (15% making charge)
+_"price set ring 12"_
+_"price set bangle 10"_
+
+*Set wastage:*
+_"price set ring wastage 2.5"_ (2.5% wastage)
+
+*Set hallmark charge:*
+_"price set hallmark 50"_ (₹50 per piece)
+
+*View your rates:*
+Type *price profile*
+
+Once set, every *quote* command uses your rates automatically!""",
+
+    "8": """*Morning Brief - 9 AM Daily*
+
+Every morning at 9 AM, I send you a personalized message:
+
+- Live gold & silver rates with change arrows
+- Your portfolio value (if you've added holdings)
+- Price alert if gold is near your buy target
+- Upcoming reminders (birthdays this week)
+- Market intelligence from overnight news
+
+It's like getting a text from a smart friend who watches the gold market for you while you sleep.
+
+*Commands:*
+- *subscribe* - Start getting morning briefs
+- *unsubscribe* - Stop daily updates
+
+_You're auto-subscribed when you join!_""",
+
+    "9": """*Invite a Friend to JewelClaw*
+
+Share these 3 simple steps:
+
+*Step 1:* Save this number in contacts:
+*+1 (415) 523-8886* → Save as "JewelClaw"
+
+*Step 2:* Open WhatsApp → New Chat → JewelClaw
+
+*Step 3:* Send this message:
+*join third-find*
+
+That's it! They'll get a personalized setup with gold rates, AI chat, and morning briefs.
+
+_Forward this message to any jeweler, wholesaler, or gold trader!_""",
+
+    "10": """*About JewelClaw*
+
+Hi! I'm *JewelClaw* - your personal AI jewelry assistant, right here on WhatsApp.
+
+Built by *Sandeep Roy* for the Indian jewelry trade.
+
+I'm a *multi-agent AI* that works for you *24/7* - even while you sleep! I watch gold prices at 2 AM, gather market news overnight, and have your personalized brief ready by 9 AM.
+
+*What makes me different:*
+- I understand natural language (Hindi + English)
+- I remember YOUR business - charges, clients, events
+- I send price alerts the moment gold hits your target
+- I never forget a birthday or festival
+
+*Version 1.0* | Built with multi-agent architecture
+
+Your feedback makes me better! Tell Sandeep what features you'd like or what's not working. We're building this together.
+
+_Powered by advanced AI, designed entirely for WhatsApp_""",
+}
 
 
 async def get_quick_rate_text(db: AsyncSession, city: str = "Mumbai") -> str:
@@ -233,11 +420,12 @@ async def handle_onboarding(db: AsyncSession, user, message_body: str) -> str:
         await db.flush()
 
         return (
-            f"All set, *{user.name}*! Here's what I'll do for you:\n\n"
-            f"📱 *Morning brief at 9 AM* with gold rates for {city}\n"
-            f"🚨 *Price alerts* when gold hits your targets\n"
-            f"💬 *AI chat* - ask me anything about gold or jewelry\n\n"
-            f"Try it now - just say *\"gold\"* or ask me anything!"
+            f"All set, *{user.name}*! Welcome to JewelClaw.\n\n"
+            f"📱 *Morning brief at 9 AM* - gold rates for {city}\n"
+            f"🚨 *Price alerts* - when gold hits your targets\n"
+            f"💬 *AI chat* - ask me anything about gold or jewelry\n"
+            f"🔔 *RemindGenie* - never forget a birthday or festival\n\n"
+            f"Type *help* to see all my features, or just say *gold* to get started!"
         )
 
 
@@ -378,18 +566,22 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
     """Handle fast-path commands for onboarded users."""
     city = user.preferred_city or "Mumbai"
 
-    # GREETING → Smart response with live rate
+    # GREETING → Smart response with live rate + nudge to help
     if command == "greeting":
         name = user.name or "there"
         rate_text = await get_quick_rate_text(db, city)
         return (
             f"Hey {name}! {rate_text}\n\n"
-            f"What do you need? Just ask - or type *gold* for full rates."
+            f"What do you need? Just ask naturally, or type *help* to see everything I can do."
         )
 
-    # HELP → Conversational, not a menu dump
+    # HELP → Interactive numbered feature menu
     if command == "help":
-        return HELP_MESSAGE
+        return get_help_menu(user.name or "there")
+
+    # FEATURE GUIDES (1-10) → Expand each feature
+    if command in FEATURE_GUIDES:
+        return FEATURE_GUIDES[command]
 
     # 2. GOLD → Show gold rates
     if command == "gold_rate":
@@ -434,7 +626,11 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
 
     # SETUP → Invite guide
     if command == "setup":
-        return ONBOARDING_GUIDE
+        return FEATURE_GUIDES["9"]
+
+    # ABOUT
+    if command == "about":
+        return FEATURE_GUIDES["10"]
 
     # ==========================================================================
     # TREND SCOUT COMMANDS
@@ -444,19 +640,11 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
     if command in ["trends", "trending"]:
         return await handle_trends_command(db, user, phone_number)
 
-    # TREND MENU OPTIONS (1-6)
-    if command == "1" or command == "fresh" or command == "today":
+    # TREND SHORTCUTS
+    if command in ("fresh", "today"):
         return await handle_fresh_picks_command(db, user, phone_number)
 
-    if command == "2":
-        return await handle_category_command(db, user, "bridal", phone_number)
-
-    if command == "3":
-        return await handle_category_command(db, user, "dailywear", phone_number)
-
-    # 4, 5, 6 removed - were pointing to broken/fake features
-
-    # 7. BRIDAL → Show bridal designs
+    # BRIDAL → Show bridal designs
     if command == "bridal":
         return await handle_category_command(db, user, "bridal", phone_number)
 
@@ -539,16 +727,17 @@ No designs in database yet. Our scraper runs daily at 6 AM to find new jewelry d
 
 _Type 'gold' for live rates or 'help' for all commands._"""
 
-    return f"""🔥 *JewelClaw Trend Scout*
-_{design_count} designs in collection_
+    return f"""🔥 *Trend Scout* - _{design_count} designs_
 
-1️⃣ *Fresh Picks* - Latest designs
-2️⃣ *Bridal* - Wedding jewelry
-3️⃣ *Daily Wear* - Lightweight designs
+Type a category to browse:
+- *fresh* - Today's latest picks
+- *bridal* - Wedding & engagement
+- *dailywear* - Lightweight everyday
+- *temple* - Traditional temple jewelry
+- *mens* - Men's collection
 
-Or type: *bridal*, *dailywear*, *temple*, *mens*
-
-_Reply with number (1-3) to browse_"""
+Like a design? Reply *like [id]* to save it.
+See your saved: *lookbook*"""
 
 
 async def handle_fresh_picks_command(db: AsyncSession, user, phone_number: str) -> str:
@@ -1663,15 +1852,14 @@ async def admin_scrape_designs(db: AsyncSession = Depends(get_db)):
 async def get_onboarding():
     """Get the onboarding guide text for sharing."""
     return {
-        "guide": ONBOARDING_GUIDE,
+        "guide": FEATURE_GUIDES["9"],
         "phone": "+1 (415) 523-8886",
         "join_code": "join third-find",
         "steps": [
             "1. Save +1 (415) 523-8886 as 'JewelClaw' in contacts",
             "2. Open WhatsApp and start chat with JewelClaw",
             "3. Send: join third-find",
-            "4. Send: gold (to test)",
-            "5. Send: subscribe (for daily 9 AM brief)"
+            "4. Type: help (to see all features)",
         ]
     }
 
@@ -1682,7 +1870,7 @@ async def send_onboarding(phone: str):
     try:
         result = await whatsapp_service.send_message(
             f"whatsapp:{phone}",
-            ONBOARDING_GUIDE
+            FEATURE_GUIDES["9"]
         )
         return {"status": "sent" if result else "failed", "phone": phone}
     except Exception as e:

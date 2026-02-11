@@ -122,14 +122,25 @@ COMMANDS = {
     "my stock": "portfolio",
     "clear inventory": "clear_inventory",
 
-    # Search removed - requires ScraperAPI key, silently fails without it
+    # About
+    "about": "about",
+    "about jewelclaw": "about",
 
-    # Trend menu options (1-3)
+    # Feature guide numbers (from help menu)
     "1": "1",
     "2": "2",
     "3": "3",
-    "fresh": "1",
-    "today": "1",
+    "4": "4",
+    "5": "5",
+    "6": "6",
+    "7": "7",
+    "8": "8",
+    "9": "9",
+    "10": "10",
+
+    # Trend shortcuts (words only)
+    "fresh": "fresh",
+    "today": "fresh",
 }
 
 
