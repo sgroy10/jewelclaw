@@ -122,7 +122,7 @@ TOOLS = [
     },
     {
         "name": "calculate_jewelry_quote",
-        "description": "Calculate a full customer quote/bill for a jewelry piece. Uses current gold rate, user's stored making charges, wastage, hallmark, and GST. Returns a complete bill breakdown.",
+        "description": "Calculate a full jewelry quote/bill with complete breakdown. Supports plain gold, gold+CZ, gold+diamond (natural & lab-grown), gold+gemstone. Uses user's stored pricing profile (model, making charges, stone rates, setting/finishing charges). Works in INR or USD. Shows cost price vs selling price if profit margin is set.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -132,27 +132,91 @@ TOOLS = [
                 },
                 "karat": {
                     "type": "string",
-                    "enum": ["24k", "22k", "18k", "14k"],
+                    "enum": ["24k", "22k", "18k", "14k", "10k", "9k"],
                     "description": "Gold karat purity.",
                 },
                 "jewelry_type": {
                     "type": "string",
-                    "description": "Type of jewelry: necklace, ring, bangle, earring, chain, pendant, bracelet, mangalsutra, anklet, coin.",
+                    "description": "Type: necklace, ring, bangle, earring, chain, pendant, bracelet, mangalsutra, anklet, coin, brooch, tikka.",
                 },
                 "making_charge_percent": {
                     "type": "number",
-                    "description": "Making charge percentage. If not provided, uses user's stored rate for this jewelry type.",
+                    "description": "Override making charge %. If not provided, uses user's stored rate.",
                 },
-                "stone_cost": {
+                "labor_per_gram": {
                     "type": "number",
-                    "description": "Additional stone/diamond cost in INR. Default 0.",
+                    "description": "Override labor rate per gram (for per-gram pricing model).",
+                },
+                "cfp_rate": {
+                    "type": "number",
+                    "description": "Override CFP (cost for piece) rate.",
+                },
+                "cz_count": {
+                    "type": "integer",
+                    "description": "Number of CZ stones. Default 0.",
+                },
+                "cz_setting": {
+                    "type": "string",
+                    "enum": ["pave", "prong", "bezel", "channel", "micro_pave", "wax_set"],
+                    "description": "CZ setting type. Default pave.",
+                },
+                "diamonds": {
+                    "type": "array",
+                    "description": "Diamond details. Each item: {sieve, count, quality, lab, setting, total_carats}.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "sieve": {"type": "string", "description": "Sieve size (000 to 16+). Default 7."},
+                            "count": {"type": "integer", "description": "Number of diamonds."},
+                            "total_carats": {"type": "number", "description": "Total carat weight (alternative to count)."},
+                            "quality": {"type": "string", "description": "Quality grade like GH-VS, DEF-VVS, IJ-SI. Default GH-VS."},
+                            "lab": {"type": "boolean", "description": "True for lab-grown diamonds. Default false."},
+                            "setting": {"type": "string", "description": "Setting type: prong, pave, bezel, channel, invisible."},
+                        },
+                    },
+                },
+                "gemstones": {
+                    "type": "array",
+                    "description": "Gemstone details. Each item: {stone, carats, grade}.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "stone": {"type": "string", "description": "Stone name: ruby, emerald, sapphire, amethyst, topaz, etc."},
+                            "carats": {"type": "number", "description": "Total carat weight."},
+                            "grade": {"type": "string", "enum": ["low", "mid", "high"], "description": "Quality grade. Default mid."},
+                        },
+                    },
+                },
+                "finishing": {
+                    "type": "array",
+                    "description": "Finishing types applied: rhodium, black_rhodium, two_tone, sandblast, enamel, antique, matte.",
+                    "items": {"type": "string"},
                 },
                 "quantity": {
                     "type": "integer",
                     "description": "Number of pieces. Default 1.",
                 },
+                "currency": {
+                    "type": "string",
+                    "enum": ["INR", "USD"],
+                    "description": "Override currency. If not provided, uses user's preference.",
+                },
             },
             "required": ["weight_grams", "karat"],
+        },
+    },
+    {
+        "name": "save_pricing_config",
+        "description": "Save pricing configuration for the user. Use when user tells you about their making charges, labor rates, CZ rates, diamond rates, setting charges, finishing charges, pricing model, currency preference, profit margin, gold loss, or any pricing-related info. Saves to their permanent pricing profile.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pricing_data": {
+                    "type": "object",
+                    "description": "Pricing data to save. Can include any of: pricing_model ('percentage'/'per_gram'/'per_piece'/'all_inclusive'), currency ('INR'/'USD'), making_charges ({type: %}), labor_per_gram ({type: rate}), cfp_rates ({type: rate}), wastage ({type: %}), gold_loss_pct, profit_margin_pct, cz_rates ({setting: rate}), setting_rates ({type: rate}), finishing_rates ({type: rate}), diamond_rates ({size_quality: rate_per_ct}), hallmark_charge.",
+                },
+            },
+            "required": ["pricing_data"],
         },
     },
     {
@@ -403,13 +467,25 @@ HOW TO TALK:
 WHAT TO DO:
 - Gold/rate questions → use get_gold_rates tool for live data.
 - User shares business info → ALWAYS save with store_business_fact (charges, thresholds, suppliers, preferences).
-- Jewelry quote → use calculate_jewelry_quote with their stored charges.
+- Jewelry quote → use calculate_jewelry_quote with their stored charges. Supports CZ, diamonds, gemstones, finishing.
 - User mentions a birthday/anniversary/date → save with add_reminder.
 - User asks about reminders → use list_reminders.
 - User mentions their stock ("I have 500g gold") → save with update_inventory.
 - Portfolio/holdings question → use get_portfolio.
 - "Should I buy?" → check their buy_threshold vs current rate, give clear advice.
-- Price alerts → use set_price_alert. Alerts run every 15 minutes automatically."""
+- Price alerts → use set_price_alert. Alerts run every 15 minutes automatically.
+
+PRICING KNOWLEDGE - You understand jewelry pricing deeply:
+- Pricing models: percentage (% of gold cost), per-gram (₹/gm labor), per-piece (CFP = cost for piece), all-inclusive (one rate/gm including gold+labor)
+- When user talks about pricing → use save_pricing_config to store their rates permanently.
+- CZ pricing: per stone by setting type (pave ₹10, prong ₹12, bezel ₹18, channel ₹18/stone)
+- Diamond pricing: by sieve size (000-16+) and quality (DEF/VVS, GH/VS, IJ/SI). Lab-grown is 75-85% cheaper.
+- Setting charges: pave, prong, bezel, channel, invisible, micro-pave (per stone)
+- Finishing: rhodium, black rhodium, two-tone, sandblast, enamel, antique (per piece)
+- Gold loss/wastage: varies 2-10% by jewelry complexity
+- Export pricing in USD: no GST, gold rate converted at live USD/INR
+- Cost vs selling price: user can set profit margin % to see both
+- If user uploads a pricing chart image, it will be analyzed automatically and you'll get the extracted data to confirm and save."""
 
         return system
 
@@ -554,6 +630,8 @@ WHAT TO DO:
                 return await self._tool_store_business_fact(db, user, tool_input)
             elif tool_name == "calculate_jewelry_quote":
                 return await self._tool_calculate_quote(db, user, tool_input)
+            elif tool_name == "save_pricing_config":
+                return await self._tool_save_pricing_config(db, user, tool_input)
             elif tool_name == "search_designs":
                 return await self._tool_search_designs(db, user, tool_input)
             elif tool_name == "set_price_alert":
@@ -663,9 +741,16 @@ WHAT TO DO:
             karat=inputs["karat"],
             jewelry_type=inputs.get("jewelry_type", "general"),
             making_charge_pct=inputs.get("making_charge_percent"),
-            stone_cost=inputs.get("stone_cost", 0),
             quantity=inputs.get("quantity", 1),
             city=user.preferred_city,
+            cz_count=inputs.get("cz_count", 0),
+            cz_setting=inputs.get("cz_setting", "pave"),
+            diamonds=inputs.get("diamonds"),
+            gemstones=inputs.get("gemstones"),
+            finishing=inputs.get("finishing"),
+            labor_per_gram=inputs.get("labor_per_gram"),
+            cfp_rate=inputs.get("cfp_rate"),
+            currency=inputs.get("currency"),
         )
 
         if "error" in quote:
@@ -674,6 +759,19 @@ WHAT TO DO:
         # Return full breakdown for Claude to format naturally
         quote["formatted_bill"] = pricing_engine.format_quote_message(quote)
         return quote
+
+    async def _tool_save_pricing_config(
+        self, db: AsyncSession, user: User, inputs: Dict
+    ) -> Dict:
+        """Save pricing configuration from conversation."""
+        pricing_data = inputs.get("pricing_data", {})
+        saved = await pricing_engine.apply_parsed_pricing(db, user.id, pricing_data)
+        return {
+            "saved": True,
+            "items_saved": len(saved),
+            "details": saved,
+            "message": f"Saved {len(saved)} pricing settings. These will be used in all future quotes.",
+        }
 
     async def _tool_search_designs(
         self, db: AsyncSession, user: User, inputs: Dict

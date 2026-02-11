@@ -141,23 +141,29 @@ I update rates every 15 minutes during market hours.""",
 
     "2": """*Quick Quote - Instant Jewelry Bill*
 
-Tell me the weight, karat, and type - I'll generate a full bill in seconds.
+Tell me what you're making - I'll generate a full bill in seconds.
 
-Try saying:
+*Plain gold:*
 _"Quote 10g 22k necklace"_
-_"Quote 5g 18k ring"_
-_"Quote 15g bangle x3"_
+_"Quote 5g 18k ring x3"_
 
-Your bill includes:
-- Gold cost at today's rate
-- Making charges (your custom rates!)
-- Wastage & hallmark charges
-- GST @ 3%
-- Total with per-gram breakdown
+*Gold + CZ:*
+_"Quote 2g 18k ring 30 cz pave"_
+_"Quote 5g 22k earring 50 cz bezel"_
 
-Set your own making charges first:
-_"price set necklace 15"_
-_"price set ring 12"_""",
+*Gold + Diamond:*
+_"Quote 3g 18k ring 0.5ct diamond GH-VS"_
+_"Quote 5g pendant 20 diamonds sieve 7"_
+
+*Gold + Gemstone:*
+_"Quote 4g 18k ring 1.5ct ruby"_
+
+Your bill includes gold + wastage + making + stones + setting + finishing + hallmark + GST.
+
+Works in *₹ INR* or *$ USD* (for exporters).
+Shows *cost price vs selling price* if you set a profit margin.
+
+_Set up your rates first: type 'price setup'_""",
 
     "3": """*RemindGenie - Never Forget!*
 
@@ -236,25 +242,38 @@ When you see a design you like:
 - *skip [id]* - Pass on it
 - *lookbook* - See all your saved designs""",
 
-    "7": """*Pricing Engine - Your Making Charges*
+    "7": """*Pricing Engine - Your Complete Pricing Profile*
 
-Set up your custom making charges, wastage, and hallmark rates. Every quote I generate will use YOUR rates.
+I support how YOU price jewelry - percentage, per-gram, CFP, or all-inclusive.
 
-*Set making charges:*
-_"price set necklace 15"_ (15% making charge)
-_"price set ring 12"_
-_"price set bangle 10"_
+*Easiest way:* Just chat naturally!
+_"I charge 14% making on necklaces"_
+_"My CZ pave rate is ₹10 per stone"_
+_"I work in USD for exports"_
 
-*Set wastage:*
-_"price set ring wastage 2.5"_ (2.5% wastage)
+*Or upload a photo* of your pricing chart - I'll read it and save everything!
 
-*Set hallmark charge:*
-_"price set hallmark 50"_ (₹50 per piece)
+*What I can store:*
+- Making charges (%, per-gram, or per-piece)
+- CZ rates by setting type (pave, prong, bezel...)
+- Diamond rates by sieve size & quality
+- Lab-grown diamond rates
+- Gemstone rates (ruby, emerald, sapphire...)
+- Setting charges (pave, channel, invisible...)
+- Finishing (rhodium, two-tone, enamel...)
+- Gold loss / wastage percentages
+- Profit margin (shows cost vs selling price)
+- Currency (INR or USD for exporters)
 
-*View your rates:*
-Type *price profile*
+*Manual commands:*
+price set model percentage
+price set necklace 15
+price set ring labor 800
+price set cz pave 12
+price set currency usd
+price set margin 15
 
-Once set, every *quote* command uses your rates automatically!""",
+*View profile:* price profile""",
 
     "8": """*Morning Brief - 9 AM Daily*
 
@@ -488,15 +507,27 @@ async def whatsapp_webhook(
 
         logger.info(f"PARSED: phone={phone_number}, body={message_body}, profile={profile_name}")
 
-        if not phone_number or not message_body:
-            logger.warning("No phone or message body")
+        if not phone_number:
+            logger.warning("No phone number")
             return PlainTextResponse("")
+
+        # Allow image-only messages (no body text)
+        if not message_body and int(form_dict.get("NumMedia", "0")) == 0:
+            logger.warning("No message body and no media")
+            return PlainTextResponse("")
+        if not message_body:
+            message_body = ""  # Will be handled by image upload logic
 
         logger.info(f"Message from {phone_number}: {message_body[:50]}...")
 
         # Get or create user
         user, is_new_user = await whatsapp_service.get_or_create_user(db, phone_number, profile_name)
         logger.info(f"USER: {user.phone_number}, new={is_new_user}")
+
+        # Check for image upload (Twilio sends MediaUrl0 for images)
+        media_url = form_dict.get("MediaUrl0")
+        media_type = form_dict.get("MediaContentType0", "")
+        num_media = int(form_dict.get("NumMedia", "0"))
 
         # Phase 1: Store incoming message with intelligence
         await store_conversation(db, user.id, "user", message_body)
@@ -518,6 +549,10 @@ async def whatsapp_webhook(
             else:
                 response = await handle_onboarding(db, user, message_body)
                 logger.info(f"ONBOARDING: step completed for {phone_number}")
+        # IMAGE UPLOAD: Handle pricing chart / document images
+        elif num_media > 0 and media_url and media_type.startswith("image/"):
+            logger.info(f"IMAGE UPLOAD: {media_url} type={media_type}")
+            response = await handle_image_upload(db, user, media_url, message_body, phone_number)
         else:
             # MAIN ROUTING: Onboarded user
             classification, confidence = agent_service.classify_message(message_body)
@@ -1055,6 +1090,74 @@ _You'll be notified when:_
     return "_Reply 'trends' for more designs_"
 
 
+async def handle_image_upload(db: AsyncSession, user, media_url: str, message_body: str, phone_number: str) -> str:
+    """Handle image uploads - detect pricing charts and process them."""
+    body_lower = message_body.lower().strip() if message_body else ""
+
+    # Check if this looks like a pricing chart upload
+    is_pricing = any(w in body_lower for w in (
+        "price", "pricing", "chart", "rate", "labor", "making",
+        "charge", "cfp", "cost", "quote", "diamond", "cz",
+        "setting", "finishing", "karigari",
+    ))
+
+    if not is_pricing and body_lower:
+        # If there's text with the image but it doesn't seem pricing-related,
+        # route to AI agent with image context
+        return await agent_service.handle_message(
+            db, user,
+            f"[User sent an image: {media_url}] {message_body}"
+        )
+
+    # Process as pricing chart
+    await whatsapp_service.send_message(
+        phone_number,
+        "📸 Analyzing your pricing chart... give me a moment."
+    )
+
+    # Use Twilio auth to access media URL
+    import httpx
+    from app.config import settings as app_settings
+    auth_media_url = media_url.replace(
+        "https://api.twilio.com",
+        f"https://{app_settings.twilio_account_sid}:{app_settings.twilio_auth_token}@api.twilio.com"
+    )
+
+    result = await pricing_engine.parse_pricing_chart_image(
+        auth_media_url,
+        user_context=f"User message: {message_body}" if message_body else ""
+    )
+
+    if "error" in result:
+        logger.error(f"Image parsing error: {result['error']}")
+        return (
+            f"I couldn't read that image clearly. Try:\n"
+            f"- Better lighting / clearer photo\n"
+            f"- Or just tell me your rates in chat!\n\n"
+            f"_Example: \"I charge 14% making on necklaces, CZ pave ₹10/stone\"_"
+        )
+
+    # Successfully parsed - save and show what we found
+    parsed_data = result.get("data", {})
+    saved_items = await pricing_engine.apply_parsed_pricing(db, user.id, parsed_data)
+
+    if not saved_items:
+        return "I could see the image but couldn't extract specific pricing data. Try telling me your rates in chat instead."
+
+    lines = ["✅ *Pricing chart saved!* Here's what I found:\n"]
+    for item in saved_items[:20]:  # Cap at 20 items
+        lines.append(f"  • {item}")
+
+    notes = parsed_data.get("notes")
+    if notes:
+        lines.append(f"\n📝 _{notes}_")
+
+    lines.append(f"\n_Total: {len(saved_items)} rates saved to your profile._")
+    lines.append("_Type 'price profile' to see your full setup._")
+
+    return "\n".join(lines)
+
+
 async def handle_quote_command(db: AsyncSession, user, message_body: str) -> str:
     """Handle quote command - generate instant jewelry bill."""
     text = message_body.strip().lower()
@@ -1063,20 +1166,26 @@ async def handle_quote_command(db: AsyncSession, user, message_body: str) -> str
     if text in ("quote", "quote help"):
         return """💎 *Quick Quote - Instant Jewelry Bill*
 
-*Usage:*
-quote [weight] [karat] [type]
-
-*Examples:*
+*Plain gold:*
 quote 10g 22k necklace
-quote 5g 18k ring
-quote 15g bangle
-quote 8g 22k chain x3
-quote 20g 22k mangalsutra
+quote 5g 18k ring x3
 
-*Supported types:*
-necklace, ring, bangle, earring, chain, pendant, bracelet, mangalsutra, anklet, coin
+*With CZ stones:*
+quote 2g 18k ring 30 cz pave
+quote 5g 22k earring 50 cz bezel
 
-_Uses YOUR making charges. Type 'price setup' to configure._"""
+*With diamonds:*
+quote 3g 18k ring 0.5ct diamond GH-VS
+quote 5g 18k pendant 20 diamonds sieve 7
+
+*With gemstones:*
+quote 4g 18k ring 1.5ct ruby
+quote 3g 18k pendant 2ct emerald
+
+*With finishing:*
+quote 2g 18k ring rhodium
+
+_Uses YOUR pricing profile. Type 'price setup' to configure._"""
 
     parsed = pricing_engine.parse_quote_input(text)
     if not parsed:
@@ -1091,6 +1200,11 @@ _Uses YOUR making charges. Type 'price setup' to configure._"""
         stone_cost=parsed.get("stone_cost", 0),
         quantity=parsed.get("quantity", 1),
         city=user.preferred_city,
+        cz_count=parsed.get("cz_count", 0),
+        cz_setting=parsed.get("cz_setting", "pave"),
+        diamonds=parsed.get("diamonds"),
+        gemstones=parsed.get("gemstones"),
+        finishing=parsed.get("finishing"),
     )
 
     return pricing_engine.format_quote_message(quote)
@@ -1114,22 +1228,67 @@ async def handle_price_command(db: AsyncSession, user, message_body: str) -> str
         if not parsed:
             return """Could not parse. Try:
 price set necklace 15
-price set ring wastage 2.5
-price set hallmark 50"""
+price set ring labor 800
+price set cz pave 12
+price set model percentage
+price set currency usd
+price set margin 15"""
 
-        if parsed["type"] == "hallmark":
+        ptype = parsed["type"]
+
+        if ptype == "hallmark":
             await pricing_engine.save_hallmark_charge(db, user.id, parsed["value"])
             return f"✅ Hallmark charge set to *₹{parsed['value']:,.0f}* per piece."
 
-        elif parsed["type"] == "wastage":
+        elif ptype == "wastage":
             jtype = pricing_engine._normalize_jewelry_type(parsed["jewelry_type"])
             await pricing_engine.save_wastage(db, user.id, jtype, parsed["value"])
             return f"✅ Wastage for *{jtype.title()}* set to *{parsed['value']}%*."
 
-        elif parsed["type"] == "making":
+        elif ptype == "making":
             jtype = pricing_engine._normalize_jewelry_type(parsed["jewelry_type"])
             await pricing_engine.save_making_charge(db, user.id, jtype, parsed["value"])
             return f"✅ Making charge for *{jtype.title()}* set to *{parsed['value']}%*.\n\n_Try: quote 10g 22k {jtype}_"
+
+        elif ptype == "labor":
+            jtype = pricing_engine._normalize_jewelry_type(parsed["jewelry_type"])
+            await pricing_engine.save_labor_per_gram(db, user.id, jtype, parsed["value"])
+            return f"✅ Labor rate for *{jtype.title()}* set to *₹{parsed['value']:,.0f}/gm*."
+
+        elif ptype == "cfp":
+            jtype = pricing_engine._normalize_jewelry_type(parsed["jewelry_type"])
+            await pricing_engine.save_cfp_rate(db, user.id, jtype, parsed["value"])
+            return f"✅ CFP rate for *{jtype.title()}* set to *{parsed['value']}*."
+
+        elif ptype == "model":
+            await pricing_engine.save_pricing_model(db, user.id, parsed["value"])
+            from app.services.pricing_engine_service import PRICING_MODELS
+            label = PRICING_MODELS.get(parsed["value"], parsed["value"])
+            return f"✅ Pricing model set to *{label}*."
+
+        elif ptype == "currency":
+            await pricing_engine.save_currency(db, user.id, parsed["value"])
+            return f"✅ Currency set to *{parsed['value']}*. {'No GST on exports.' if parsed['value'] == 'USD' else ''}"
+
+        elif ptype == "margin":
+            await pricing_engine.save_profit_margin(db, user.id, parsed["value"])
+            return f"✅ Profit margin set to *{parsed['value']}%*. Quotes will now show cost + selling price."
+
+        elif ptype == "gold_loss":
+            await pricing_engine.save_gold_loss(db, user.id, parsed["value"])
+            return f"✅ Gold loss set to *{parsed['value']}%*."
+
+        elif ptype == "cz":
+            await pricing_engine.save_cz_rate(db, user.id, parsed["setting"], parsed["value"])
+            return f"✅ CZ rate for *{parsed['setting']}* set to *{parsed['value']}* per stone."
+
+        elif ptype == "setting":
+            await pricing_engine.save_setting_rate(db, user.id, parsed["setting"], parsed["value"])
+            return f"✅ Setting charge for *{parsed['setting']}* set to *{parsed['value']}* per stone."
+
+        elif ptype == "finishing":
+            await pricing_engine.save_finishing_rate(db, user.id, parsed["finishing"], parsed["value"])
+            return f"✅ Finishing charge for *{parsed['finishing']}* set to *{parsed['value']}* per piece."
 
     return pricing_engine.get_setup_menu()
 

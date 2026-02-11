@@ -138,6 +138,12 @@ COMMANDS = {
     "9": "9",
     "10": "10",
 
+    # Pricing commands
+    "price setup": "price setup",
+    "price profile": "price profile",
+    "pricing": "pricing",
+    "my prices": "pricing",
+
     # Trend shortcuts (words only)
     "fresh": "fresh",
     "today": "fresh",
