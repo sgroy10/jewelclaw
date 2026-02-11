@@ -2661,7 +2661,7 @@ async def debug_remind_preview(phone: str, send: bool = False, db: AsyncSession 
     If no reminders match today, simulates with sample birthday + anniversary.
     """
     import traceback
-    from datetime import date as date_type
+    from datetime import datetime as dt_now
 
     try:
         # Find user
@@ -2675,7 +2675,7 @@ async def debug_remind_preview(phone: str, send: bool = False, db: AsyncSession 
         # Check if user has any reminders matching today
         import pytz
         ist = pytz.timezone("Asia/Kolkata")
-        today = datetime.now(ist).date()
+        today = dt_now.now(ist).date()
 
         # Get today's actual reminders
         today_reminders = await reminder_service.get_todays_reminders(db, today=today)
