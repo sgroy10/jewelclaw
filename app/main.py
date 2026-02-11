@@ -14,7 +14,7 @@ from sqlalchemy import select, desc, func
 from app.config import settings
 from app.database import init_db, close_db, get_db, reset_db
 # Import models to ensure they're registered with Base.metadata
-from app.models import User, Conversation, MetalRate, Design, UserDesignPreference, Lookbook, PriceHistory, Alert, TrendReport, BusinessMemory, ConversationSummary, Reminder
+from app.models import User, Conversation, MetalRate, Design, UserDesignPreference, Lookbook, PriceHistory, Alert, TrendReport, BusinessMemory, ConversationSummary, Reminder, FestivalCalendar, IndustryNews
 from app.services.whatsapp_service import whatsapp_service
 from app.services.agent_service import agent_service
 from app.services.gold_service import metal_service
@@ -709,6 +709,18 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
     if command == "mens":
         return await handle_category_command(db, user, "mens", phone_number)
 
+    # LUXURY → Global luxury designs
+    if command == "luxury":
+        return await handle_category_command(db, user, "luxury", phone_number)
+
+    # CONTEMPORARY → Modern minimalist
+    if command == "contemporary":
+        return await handle_category_command(db, user, "contemporary", phone_number)
+
+    # NEWS → Jewelry industry news
+    if command == "news":
+        return await handle_industry_news_command(db, user, phone_number)
+
     # 11. LIKE/SAVE design
     if command and command.startswith(("like", "save")):
         return await handle_like_command(db, user, command)
@@ -778,15 +790,20 @@ _Type 'gold' for live rates or 'help' for all commands._"""
 
     return f"""🔥 *Trend Scout* - _{design_count} designs_
 
-Type a category to browse:
+*Browse:*
 - *fresh* - Today's latest picks
 - *bridal* - Wedding & engagement
 - *dailywear* - Lightweight everyday
-- *temple* - Traditional temple jewelry
+- *temple* - Traditional South Indian
 - *mens* - Men's collection
+- *luxury* - Global luxury brands
+- *contemporary* - Modern minimalist
 
-Like a design? Reply *like [id]* to save it.
-See your saved: *lookbook*"""
+*Curated:*
+- *news* - Industry launches & trends
+
+Like a design? Reply *like [id]* to save
+See saved: *lookbook*"""
 
 
 async def handle_fresh_picks_command(db: AsyncSession, user, phone_number: str) -> str:
@@ -886,36 +903,11 @@ No new arrivals yet. Check back soon!"""
 
 
 async def handle_industry_news_command(db: AsyncSession, user, phone_number: str) -> str:
-    """Handle industry news - show market updates and news."""
-    # For now, return curated industry insights
-    # TODO: Add actual news scraping from Google News, ET, etc.
+    """Handle industry news - show real-time jewelry industry news from RSS feeds."""
+    from app.services.industry_news_service import industry_news_service
 
-    from datetime import datetime
-
-    today = datetime.now().strftime("%d %b %Y")
-
-    return f"""📰 *Jewelry Industry News*
-_{today}_
-
-*Gold Market:*
-Send 'gold' for live rates and analysis
-
-*Trending Styles:*
-• Minimalist designs gaining popularity
-• Temple jewelry seeing revival
-• Layered necklaces trending globally
-
-*Market Updates:*
-• Wedding season demand rising
-• Lab-grown diamonds market growing
-• Sustainable jewelry gaining traction
-
-*Coming Soon:*
-• Real-time news alerts
-• Competitor collection updates
-• Price trend analysis
-
-_Reply 'gold' for rates | 'trends' for designs_"""
+    news_items = await industry_news_service.get_recent(db, limit=8)
+    return industry_news_service.format_news_message(news_items)
 
 
 async def handle_category_command(db: AsyncSession, user, category: str, phone_number: str) -> str:
@@ -928,6 +920,7 @@ async def handle_category_command(db: AsyncSession, user, category: str, phone_n
         "temple": "🛕 Temple Jewelry",
         "mens": "👔 Men's Collection",
         "contemporary": "🎨 Contemporary Styles",
+        "luxury": "💎 Global Luxury",
     }
 
     title = category_titles.get(category, f"📿 {category.title()} Designs")
@@ -2552,6 +2545,27 @@ async def trigger_market_intelligence():
         "cached_intel_length": len(intel) if intel else 0,
         "cached_intel": intel or "(empty)",
     }
+
+
+@app.post("/scheduler/trigger/festival-refresh")
+async def trigger_festival_refresh():
+    """Manually trigger festival calendar refresh."""
+    await scheduler_service.refresh_festival_calendar()
+    return {"status": "triggered"}
+
+
+@app.post("/scheduler/trigger/industry-news")
+async def trigger_industry_news():
+    """Manually trigger industry news scrape + categorize + alert."""
+    await scheduler_service.scrape_industry_news()
+    return {"status": "triggered"}
+
+
+@app.post("/scheduler/trigger/editorial-scrape")
+async def trigger_editorial_scrape():
+    """Manually trigger editorial design scrape."""
+    await scheduler_service.scrape_editorial_designs()
+    return {"status": "triggered"}
 
 
 @app.get("/admin/preview/morning-brief/{phone}")

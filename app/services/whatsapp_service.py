@@ -148,6 +148,22 @@ COMMANDS = {
     # Trend shortcuts (words only)
     "fresh": "fresh",
     "today": "fresh",
+
+    # Global / Luxury
+    "luxury": "luxury",
+    "global": "luxury",
+    "cartier": "luxury",
+    "tiffany": "luxury",
+
+    # Contemporary / Modern
+    "contemporary": "contemporary",
+    "modern": "contemporary",
+    "minimal": "contemporary",
+
+    # Industry News
+    "news": "news",
+    "industry": "news",
+    "jewelry news": "news",
 }
 
 

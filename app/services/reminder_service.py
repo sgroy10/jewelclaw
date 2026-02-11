@@ -28,9 +28,9 @@ logger = logging.getLogger(__name__)
 # The scheduler will match on month+day
 # =============================================================================
 
-# 2026 Indian Festival Calendar - verified dates
-# Fixed-date festivals are always correct. Lunar festivals updated for 2026.
-INDIAN_FESTIVALS = [
+# FALLBACK festivals - used ONLY if DB festival calendar is empty.
+# Prefer the auto-updated FestivalCalendar table (see festival_calendar_service.py).
+FALLBACK_FESTIVALS = [
     # January
     (1, 1, "New Year", "festival", "New Year wishes"),
     (1, 13, "Lohri", "festival", "Lohri ki lakh lakh badhai"),
@@ -240,8 +240,8 @@ class ReminderService:
 
         return upcoming
 
-    async def get_todays_festivals(self, today: Optional[date] = None) -> List[Dict]:
-        """Get festivals for today from the built-in calendar."""
+    async def get_todays_festivals(self, today: Optional[date] = None, db: AsyncSession = None) -> List[Dict]:
+        """Get festivals for today. Uses DB calendar first, falls back to hardcoded list."""
         if today is None:
             import pytz
             ist = pytz.timezone("Asia/Kolkata")
@@ -249,9 +249,21 @@ class ReminderService:
 
         month = today.month
         day = today.day
+        year = today.year
 
+        # Try DB-backed festival calendar first
+        if db:
+            try:
+                from app.services.festival_calendar_service import festival_calendar_service
+                db_festivals = await festival_calendar_service.get_festivals_for_date(db, month, day, year)
+                if db_festivals:
+                    return db_festivals
+            except Exception as e:
+                logger.warning(f"DB festival lookup failed: {e}")
+
+        # Fallback to hardcoded list
         festivals = []
-        for f_month, f_day, f_name, f_type, f_hint in INDIAN_FESTIVALS:
+        for f_month, f_day, f_name, f_type, f_hint in FALLBACK_FESTIVALS:
             if f_month == month and f_day == day:
                 festivals.append({
                     "name": f_name,
@@ -273,8 +285,27 @@ class ReminderService:
         existing = result.scalars().all()
         existing_keys = {(r.remind_month, r.remind_day, r.name) for r in existing}
 
+        # Try DB-backed festival calendar first
+        festival_list = []
+        try:
+            from app.services.festival_calendar_service import festival_calendar_service
+            import pytz
+            year = datetime.now(pytz.timezone("Asia/Kolkata")).year
+            db_festivals = await festival_calendar_service.get_all_festivals_for_year(db, year)
+            if db_festivals:
+                festival_list = [
+                    (f["month"], f["day"], f["name"], f["type"], f.get("hint", ""))
+                    for f in db_festivals
+                ]
+        except Exception as e:
+            logger.warning(f"DB festival calendar lookup failed: {e}")
+
+        # Fallback to hardcoded list
+        if not festival_list:
+            festival_list = FALLBACK_FESTIVALS
+
         count = 0
-        for f_month, f_day, f_name, f_type, f_hint in INDIAN_FESTIVALS:
+        for f_month, f_day, f_name, f_type, f_hint in festival_list:
             if (f_month, f_day, f_name) not in existing_keys:
                 reminder = Reminder(
                     user_id=user_id,

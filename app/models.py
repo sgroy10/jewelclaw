@@ -166,9 +166,10 @@ class Design(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
 
     # Source info
-    source = Column(String(50), nullable=False, index=True)  # bluestone, caratlane, tanishq, pinterest
+    source = Column(String(50), nullable=False, index=True)  # bluestone, caratlane, tanishq, pinterest, amazon, etsy, vogue
     source_url = Column(String(500), nullable=True)
     image_url = Column(String(500), nullable=True)
+    source_type = Column(String(30), default="product")  # product, editorial, marketplace, inspiration
 
     # Design details
     title = Column(String(200), nullable=True)
@@ -390,6 +391,54 @@ class Reminder(Base):
 
     def __repr__(self):
         return f"<Reminder {self.name} - {self.occasion} ({self.remind_month}/{self.remind_day})>"
+
+
+class FestivalCalendar(Base):
+    """Auto-updated Indian festival calendar with correct dates per year."""
+
+    __tablename__ = "festival_calendar"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    year = Column(Integer, nullable=False, index=True)
+    month = Column(Integer, nullable=False)
+    day = Column(Integer, nullable=False)
+    name = Column(String(100), nullable=False)
+    festival_type = Column(String(30), default="festival")  # festival, national, special
+    greeting_hint = Column(String(200), nullable=True)
+    is_lunar = Column(Boolean, default=False)  # True = date shifts yearly
+
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_festival_year_month_day", "year", "month", "day"),
+    )
+
+
+class IndustryNews(Base):
+    """Jewelry industry news items scraped from RSS feeds."""
+
+    __tablename__ = "industry_news"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    headline = Column(String(500), nullable=False)
+    source_url = Column(String(500), nullable=True)
+    source = Column(String(100), nullable=True)  # google_news, jck, et, etc.
+
+    # AI categorization
+    category = Column(String(50), nullable=True)  # launch, store_opening, collection, regulation, market, trend
+    priority = Column(String(20), default="low")  # high, medium, low
+    brands = Column(JSON, default=[])  # ["Tanishq", "Cartier"]
+    summary = Column(Text, nullable=True)  # Claude one-liner
+
+    # Status
+    is_alerted = Column(Boolean, default=False)
+    is_briefed = Column(Boolean, default=False)
+
+    scraped_at = Column(DateTime, server_default=func.now(), index=True)
+
+    __table_args__ = (
+        Index("idx_industry_news_priority", "priority", "scraped_at"),
+    )
 
 
 class ConversationSummary(Base):

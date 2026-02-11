@@ -18,6 +18,8 @@ from app.services.image_service import image_service
 from app.services.business_memory_service import business_memory_service
 from app.services.reminder_service import reminder_service
 from app.services.background_agent_service import background_agent
+from app.services.festival_calendar_service import festival_calendar_service
+from app.services.industry_news_service import industry_news_service
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +121,33 @@ class SchedulerService:
             replace_existing=True
         )
 
+        # Festival Calendar Refresh: January 1st + on startup
+        self.scheduler.add_job(
+            self.refresh_festival_calendar,
+            CronTrigger(month=1, day=1, hour=0, minute=1, timezone=IST),
+            id="festival_refresh",
+            name="Annual Festival Calendar Refresh",
+            replace_existing=True
+        )
+
+        # Industry News: Every 4 hours during the day
+        self.scheduler.add_job(
+            self.scrape_industry_news,
+            CronTrigger(hour="6,10,14,18,22", minute=15, timezone=IST),
+            id="industry_news",
+            name="Jewelry Industry News Scrape",
+            replace_existing=True
+        )
+
+        # Evening Design Scrape: 6 PM IST (editorial sources for freshness)
+        self.scheduler.add_job(
+            self.scrape_editorial_designs,
+            CronTrigger(hour=18, minute=0, timezone=IST),
+            id="evening_design_scraper",
+            name="Evening Editorial Design Scrape",
+            replace_existing=True
+        )
+
         logger.info("Scheduled jobs configured")
 
     def start(self):
@@ -127,6 +156,10 @@ class SchedulerService:
         if not self.scheduler.running:
             self.scheduler.start()
             logger.info("Scheduler started")
+
+            # Startup: ensure festival calendar exists for current year
+            import asyncio
+            asyncio.get_event_loop().create_task(self._startup_festival_check())
 
     def stop(self):
         """Stop the scheduler."""
@@ -277,6 +310,17 @@ class SchedulerService:
             if intel_lines:
                 parts.append(f"\n🌙 Overnight: " + " ".join(intel_lines))
 
+        # --- INDUSTRY NEWS (from RSS feeds) ---
+        try:
+            brief_news = await industry_news_service.get_for_morning_brief(db)
+            if brief_news:
+                news_summaries = [n.summary[:80] for n in brief_news[:2] if n.summary]
+                if news_summaries:
+                    parts.append(f"\n📰 " + " | ".join(news_summaries))
+                await industry_news_service.mark_as_briefed(db, [n.id for n in brief_news[:2]])
+        except Exception:
+            pass
+
         # --- EXPERT ONE-LINER ---
         if analysis.recommendation_text:
             parts.append(f"\n💡 {analysis.recommendation_text}")
@@ -416,6 +460,57 @@ class SchedulerService:
                     except Exception as e:
                         logger.error(f"Error scraping {category}: {e}")
                         sources_results[category] = 0
+
+                # --- Phase 2: Editorial + Marketplace sources ---
+                try:
+                    from app.services.editorial_scraper import editorial_scraper
+
+                    editorial_categories = ["necklaces", "earrings", "bridal", "luxury", "contemporary", "temple", "mens"]
+                    for category in editorial_categories:
+                        try:
+                            designs = await editorial_scraper.scrape_editorial_sources(category, limit=6)
+                            saved_count = 0
+                            for design in designs:
+                                existing = await db.execute(
+                                    select(Design).where(
+                                        (Design.source_url == design.source_url) & (Design.source_url != "")
+                                    ) if design.source_url else select(Design).where(
+                                        (Design.title == design.title) & (Design.source == design.source)
+                                    )
+                                )
+                                if existing.scalar_one_or_none():
+                                    continue
+
+                                cloudinary_url = design.image_url
+                                if image_service.configured and design.image_url:
+                                    try:
+                                        cloudinary_url = await image_service.upload_from_url(
+                                            design.image_url, design.source
+                                        )
+                                    except Exception:
+                                        pass
+
+                                db_design = Design(
+                                    source=design.source,
+                                    source_url=design.source_url or "",
+                                    image_url=cloudinary_url,
+                                    title=design.title,
+                                    category=design.category or category,
+                                    metal_type=design.metal_type,
+                                    price_range_min=design.price,
+                                    source_type=design.source_type,
+                                    trending_score=85,
+                                )
+                                db.add(db_design)
+                                saved_count += 1
+
+                            sources_results[f"editorial_{category}"] = saved_count
+                            total_saved += saved_count
+                            logger.info(f"  editorial {category}: {saved_count} new designs")
+                        except Exception as e:
+                            logger.error(f"Editorial scrape {category}: {e}")
+                except Exception as e:
+                    logger.error(f"Editorial scraper import/run error: {e}")
 
                 await db.commit()
 
@@ -571,6 +666,134 @@ class SchedulerService:
     async def trigger_morning_brief_now(self):
         """Manually trigger morning brief."""
         await self.send_morning_briefs()
+
+    async def _startup_festival_check(self):
+        """On startup, ensure festival calendar exists for current year."""
+        try:
+            async with get_db_session() as db:
+                current_year = datetime.now(IST).year
+                count = await festival_calendar_service.refresh_festival_calendar(db, current_year)
+                if count > 0:
+                    await db.commit()
+                    logger.info(f"Startup: Generated {count} festivals for {current_year}")
+                else:
+                    logger.info(f"Startup: Festival calendar for {current_year} already exists")
+        except Exception as e:
+            logger.error(f"Startup festival check failed: {e}")
+
+    async def refresh_festival_calendar(self):
+        """Refresh festival calendar for current and next year."""
+        logger.info("FESTIVAL CALENDAR: Annual refresh")
+        try:
+            async with get_db_session() as db:
+                current_year = datetime.now(IST).year
+                count1 = await festival_calendar_service.refresh_festival_calendar(db, current_year)
+                count2 = await festival_calendar_service.refresh_festival_calendar(db, current_year + 1)
+                await db.commit()
+                logger.info(f"Festival calendar refresh: {count1} for {current_year}, {count2} for {current_year + 1}")
+        except Exception as e:
+            logger.error(f"Festival calendar refresh error: {e}")
+
+    async def scrape_industry_news(self):
+        """Scrape jewelry industry news every 4 hours, categorize, send urgent alerts."""
+        logger.info("INDUSTRY NEWS: Starting scrape")
+        try:
+            async with get_db_session() as db:
+                # Scrape new headlines from RSS feeds
+                new_headlines = await industry_news_service.scrape_all_feeds(db)
+
+                if new_headlines:
+                    # Categorize with Claude
+                    saved = await industry_news_service.categorize_and_save(db, new_headlines)
+                    logger.info(f"Industry news: {saved} items categorized and saved")
+
+                    # Send HIGH priority alerts immediately
+                    urgent = await industry_news_service.get_urgent_unsent(db)
+                    if urgent:
+                        users = await whatsapp_service.get_subscribed_users(db)
+                        sent = 0
+                        for item in urgent:
+                            msg = industry_news_service.format_urgent_alert(item)
+                            for user in users:
+                                phone = f"whatsapp:{user.phone_number}"
+                                await whatsapp_service.send_message(phone, msg)
+                            sent += 1
+                        await industry_news_service.mark_as_alerted(db, [i.id for i in urgent])
+                        logger.info(f"Industry alerts: {sent} urgent items sent to {len(users)} users")
+
+                await db.commit()
+                logger.info("INDUSTRY NEWS: Scrape complete")
+        except Exception as e:
+            logger.error(f"Industry news scrape error: {e}")
+
+    async def scrape_editorial_designs(self):
+        """Evening editorial design scrape (6 PM IST)."""
+        from app.models import Design
+        from sqlalchemy import select
+
+        logger.info("=" * 50)
+        logger.info("EVENING EDITORIAL SCRAPE - Trend Scout")
+        logger.info("=" * 50)
+
+        try:
+            from app.services.editorial_scraper import editorial_scraper
+
+            async with get_db_session() as db:
+                total_saved = 0
+                categories = ["necklaces", "earrings", "bridal", "luxury", "contemporary"]
+
+                for category in categories:
+                    try:
+                        designs = await editorial_scraper.scrape_editorial_sources(category, limit=6)
+
+                        saved_count = 0
+                        for design in designs:
+                            # Check if already exists
+                            existing = await db.execute(
+                                select(Design).where(
+                                    (Design.source_url == design.source_url) & (Design.source_url != "")
+                                ) if design.source_url else select(Design).where(
+                                    (Design.title == design.title) & (Design.source == design.source)
+                                )
+                            )
+                            if existing.scalar_one_or_none():
+                                continue
+
+                            # Upload to Cloudinary if available
+                            cloudinary_url = design.image_url
+                            if image_service.configured and design.image_url:
+                                try:
+                                    cloudinary_url = await image_service.upload_from_url(
+                                        design.image_url, design.source
+                                    )
+                                except Exception:
+                                    pass
+
+                            db_design = Design(
+                                source=design.source,
+                                source_url=design.source_url or "",
+                                image_url=cloudinary_url,
+                                title=design.title,
+                                category=design.category or category,
+                                metal_type=design.metal_type,
+                                price_range_min=design.price,
+                                source_type=design.source_type,
+                                trending_score=80,
+                            )
+                            db.add(db_design)
+                            saved_count += 1
+
+                        total_saved += saved_count
+                        logger.info(f"  {category}: {saved_count} new designs")
+
+                    except Exception as e:
+                        logger.error(f"Editorial scrape {category}: {e}")
+
+                await db.commit()
+                logger.info(f"EVENING SCRAPE COMPLETE: {total_saved} new designs")
+
+        except Exception as e:
+            logger.error(f"Evening editorial scrape error: {e}")
 
     def get_job_status(self) -> dict:
         """Get status of all scheduled jobs."""
