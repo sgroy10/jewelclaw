@@ -37,7 +37,7 @@ EXACT_COMMANDS = {
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
     "fresh", "today", "about", "about jewelclaw",
     "remind", "remind list", "remind festivals",
-    "quote", "price setup", "price profile", "pricing",
+    "quote", "price set", "price setup", "price profile", "pricing",
     "portfolio", "inventory", "holdings", "my holdings",
 }
 
@@ -59,7 +59,7 @@ FUZZY_PATTERNS = [
     (r"^(birthday|anniversary|reminder)", "remind"),
     (r"^quote\s+\d", "quote"),
     (r"^price\s+(setup|set|profile|view)", "price setup"),
-    (r"^(pricing|my\s*prices)", "pricing"),
+    (r"^(pricing|my\s*prices|making\s*charge|karigari|labor\s*rate)", "pricing"),
     (r"^(portfolio|my\s*holdings|inventory|my\s*stock)", "portfolio"),
     (r"^i\s+have\s+\d+.*(?:gold|silver|platinum|sona|chandi)", "inventory_update"),
     (r"^(clear|remove|delete)\s+inventory", "clear_inventory"),
@@ -167,12 +167,13 @@ TOOLS = [
                         "type": "object",
                         "properties": {
                             "sieve": {"type": "string", "description": "Sieve size (000 to 16+). Default 7."},
-                            "count": {"type": "integer", "description": "Number of diamonds."},
+                            "count": {"type": "integer", "description": "Number of diamonds. Required unless total_carats is given."},
                             "total_carats": {"type": "number", "description": "Total carat weight (alternative to count)."},
                             "quality": {"type": "string", "description": "Quality grade like GH-VS, DEF-VVS, IJ-SI. Default GH-VS."},
                             "lab": {"type": "boolean", "description": "True for lab-grown diamonds. Default false."},
                             "setting": {"type": "string", "description": "Setting type: prong, pave, bezel, channel, invisible."},
                         },
+                        "required": ["count"],
                     },
                 },
                 "gemstones": {
@@ -185,6 +186,7 @@ TOOLS = [
                             "carats": {"type": "number", "description": "Total carat weight."},
                             "grade": {"type": "string", "enum": ["low", "mid", "high"], "description": "Quality grade. Default mid."},
                         },
+                        "required": ["stone", "carats"],
                     },
                 },
                 "finishing": {

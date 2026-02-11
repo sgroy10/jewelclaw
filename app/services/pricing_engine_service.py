@@ -325,9 +325,10 @@ class PricingEngineService:
                     profile["profit_margin_pct"] = m.value_numeric
                 elif key == "show_cost_price":
                     profile["show_cost_price"] = m.value.lower() in ("true", "yes", "1")
-                elif key.startswith("making_"):
+                elif key.startswith("making_") and key != "making_charges":
                     jtype = key.replace("making_", "").replace("_charge", "")
-                    profile["making_charges"][jtype] = m.value_numeric
+                    if jtype:  # Skip empty jewelry type
+                        profile["making_charges"][jtype] = m.value_numeric
                 elif key.startswith("labor_pergram_"):
                     jtype = key.replace("labor_pergram_", "")
                     profile["labor_per_gram"][jtype] = m.value_numeric
@@ -1324,11 +1325,24 @@ Return ONLY valid JSON, nothing else.""",
 
             # Parse the response
             text = response.content[0].text.strip()
-            # Try to extract JSON from the response
-            json_match = re.search(r'\{[\s\S]*\}', text)
-            if json_match:
-                data = json.loads(json_match.group())
+            # Try direct JSON parse first (most reliable)
+            try:
+                data = json.loads(text)
                 return {"success": True, "data": data}
+            except json.JSONDecodeError:
+                pass
+            # Fallback: extract JSON from markdown code block or surrounding text
+            # Use non-greedy match to avoid capturing extra braces
+            json_match = re.search(r'\{[\s\S]*?\}(?=\s*$)', text)
+            if not json_match:
+                # Try greedy as last resort, but validate
+                json_match = re.search(r'\{[\s\S]*\}', text)
+            if json_match:
+                try:
+                    data = json.loads(json_match.group())
+                    return {"success": True, "data": data}
+                except json.JSONDecodeError:
+                    return {"error": "Could not parse pricing data from image", "raw": text}
             else:
                 return {"error": "Could not parse pricing data from image", "raw": text}
 

@@ -139,6 +139,7 @@ COMMANDS = {
     "10": "10",
 
     # Pricing commands
+    "price set": "price set",
     "price setup": "price setup",
     "price profile": "price profile",
     "pricing": "pricing",
@@ -257,9 +258,9 @@ class WhatsAppService:
         if normalized in COMMANDS:
             return COMMANDS[normalized]
 
-        # Check if message starts with a command
+        # Check if message starts with a command (require word boundary)
         for cmd, action in COMMANDS.items():
-            if normalized.startswith(cmd):
+            if normalized.startswith(cmd + " ") or normalized.startswith(cmd + "\n"):
                 return action
 
         return None

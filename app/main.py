@@ -1129,12 +1129,17 @@ async def handle_image_upload(db: AsyncSession, user, media_url: str, message_bo
     )
 
     # Use Twilio auth to access media URL
-    import httpx
+    from urllib.parse import urlparse
     from app.config import settings as app_settings
-    auth_media_url = media_url.replace(
-        "https://api.twilio.com",
-        f"https://{app_settings.twilio_account_sid}:{app_settings.twilio_auth_token}@api.twilio.com"
-    )
+    parsed_url = urlparse(media_url)
+    if parsed_url.hostname and "twilio.com" in parsed_url.hostname:
+        auth_media_url = media_url.replace(
+            f"https://{parsed_url.hostname}",
+            f"https://{app_settings.twilio_account_sid}:{app_settings.twilio_auth_token}@{parsed_url.hostname}"
+        )
+    else:
+        # Non-Twilio URL, use as-is
+        auth_media_url = media_url
 
     result = await pricing_engine.parse_pricing_chart_image(
         auth_media_url,
