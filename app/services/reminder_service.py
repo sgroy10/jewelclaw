@@ -207,6 +207,39 @@ class ReminderService:
 
         return user_reminders
 
+    async def get_upcoming_reminders(
+        self, db: AsyncSession, user_id: int, days: int = 7
+    ) -> List[Dict]:
+        """Get a user's reminders in the next N days (for morning brief)."""
+        import pytz
+        from datetime import timedelta
+        ist = pytz.timezone("Asia/Kolkata")
+        today = datetime.now(ist).date()
+
+        upcoming = []
+        for d in range(1, days + 1):
+            check_date = today + timedelta(days=d)
+            result = await db.execute(
+                select(Reminder).where(
+                    and_(
+                        Reminder.user_id == user_id,
+                        Reminder.remind_month == check_date.month,
+                        Reminder.remind_day == check_date.day,
+                        Reminder.is_active == True,
+                        Reminder.occasion != "festival",
+                    )
+                )
+            )
+            for r in result.scalars().all():
+                upcoming.append({
+                    "name": r.name,
+                    "occasion": r.occasion,
+                    "relation": r.relation,
+                    "days_away": d,
+                })
+
+        return upcoming
+
     async def get_todays_festivals(self, today: Optional[date] = None) -> List[Dict]:
         """Get festivals for today from the built-in calendar."""
         if today is None:

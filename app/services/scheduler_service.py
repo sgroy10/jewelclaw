@@ -135,140 +135,154 @@ class SchedulerService:
             logger.info("Scheduler stopped")
 
     async def send_morning_briefs(self):
-        """Send personalized morning brief to all subscribed users."""
+        """Send personalized, flowing morning brief to all subscribed users."""
         logger.info("=" * 50)
-        logger.info("STARTING 9 AM MORNING BRIEF DISTRIBUTION")
+        logger.info("STARTING 9 AM MORNING BRIEF")
         logger.info("=" * 50)
 
         try:
             async with get_db_session() as db:
-                # Try fresh scrape first
+                # Scrape fresh rates
                 scraped_data = await metal_service.fetch_all_rates("mumbai")
-
-                # Get database rate (fresh or cached)
                 rate = await metal_service.get_current_rates(db, "Mumbai", force_refresh=bool(scraped_data))
                 if not rate:
-                    logger.error("Could not get rates for morning brief (no scraped or cached data)")
+                    logger.error("No rates available for morning brief")
                     return
 
-                logger.info(f"Morning brief using rate: 24K=₹{rate.gold_24k}, date={rate.rate_date}")
-
-                # Get market analysis
+                # Get analysis for change data
                 analysis = await metal_service.get_market_analysis(db, "Mumbai")
 
-                # Get expert analysis (use scraped data if available, else build from DB)
-                if scraped_data:
-                    expert_analysis = await metal_service.get_cached_expert_analysis(scraped_data, analysis)
-                else:
-                    logger.warning("Rate scrape failed, using cached DB rates for morning brief")
-                    from app.services.gold_service import MetalRateData
-                    cached_data = MetalRateData(
-                        city=rate.city, rate_date=rate.rate_date or "Today",
-                        gold_24k=rate.gold_24k, gold_22k=rate.gold_22k,
-                        gold_18k=rate.gold_18k, gold_14k=rate.gold_14k,
-                        silver=rate.silver or 0, platinum=rate.platinum or 0,
-                        gold_usd_oz=rate.gold_usd_oz, silver_usd_oz=rate.silver_usd_oz,
-                        usd_inr=rate.usd_inr,
-                        mcx_gold_futures=getattr(rate, 'mcx_gold_futures', None),
-                        mcx_silver_futures=getattr(rate, 'mcx_silver_futures', None),
-                    )
-                    expert_analysis = await metal_service.get_cached_expert_analysis(cached_data, analysis)
-                    scraped_data = cached_data
+                # Calculate gold change
+                gold_24k = rate.gold_24k
+                change_24k = analysis.daily_change
+                if change_24k == 0 and scraped_data:
+                    yesterday = getattr(scraped_data, 'yesterday_24k', None)
+                    if yesterday and yesterday > 0:
+                        change_24k = gold_24k - yesterday
 
-                # Get overnight market intelligence (gathered at midnight)
+                silver = rate.silver or 0
+
+                # Get overnight intel
                 market_intel = self._cached_market_intel or ""
 
-                # Get subscribed users
+                # Get subscribers
                 users = await whatsapp_service.get_subscribed_users(db)
-                logger.info(f"Found {len(users)} subscribed users")
-
+                logger.info(f"Found {len(users)} subscribers")
                 if not users:
-                    logger.info("No subscribers to send morning brief")
                     return
 
-                # Get new designs count for Trend Scout teaser
-                new_designs_count = await scraper_service.get_new_designs_count(db, hours=24)
-
-                # Send personalized message to each user
                 success_count = 0
                 for user in users:
                     try:
-                        # Personalized greeting
-                        name = user.name or "Friend"
-                        greeting = f"🌅 *Good Morning {name}!*\nHere's your JewelClaw Gold Brief...\n\n"
-
-                        # Format brief without the header (we add personalized one)
-                        brief_body = metal_service.format_morning_brief(
-                            rate, analysis, expert_analysis, scraped_data,
-                            skip_header=True
+                        brief = await self._build_flowing_brief(
+                            db, user, gold_24k, change_24k, silver,
+                            rate, analysis, market_intel
                         )
 
-                        # AI Agent: Personalized buy/sell threshold insight
-                        threshold_insight = ""
-                        try:
-                            thresholds = await business_memory_service.get_buy_thresholds(db, user.id)
-                            gold_24k = rate.gold_24k if rate else 0
-                            if thresholds.get("buy") and gold_24k:
-                                buy_price = thresholds["buy"]
-                                diff = gold_24k - buy_price
-                                if diff < 0:
-                                    threshold_insight = f"\n\n💡 Gold at ₹{gold_24k:,.0f} - ₹{abs(diff):,.0f} *below* your buy price of ₹{buy_price:,.0f}!\n   Good time to stock up!"
-                                else:
-                                    threshold_insight = f"\n\n📊 Gold at ₹{gold_24k:,.0f} - ₹{diff:,.0f} above your usual ₹{buy_price:,.0f}. Consider waiting."
-                        except Exception as e:
-                            logger.warning(f"Threshold check failed for {user.phone_number}: {e}")
-
-                        # Overnight market intelligence section
-                        intel_section = ""
-                        if market_intel:
-                            intel_section = f"\n\n🌙 *WHILE YOU SLEPT*\n{market_intel}"
-
-                        # Portfolio snapshot for users with inventory
-                        portfolio_section = ""
-                        try:
-                            portfolio = await background_agent.get_portfolio_summary(db, user.id)
-                            if "error" not in portfolio and portfolio.get("holdings"):
-                                total = portfolio["total_value"]
-                                change = portfolio["total_change"]
-                                pct = portfolio["total_change_pct"]
-                                if change > 0:
-                                    portfolio_section = f"\n\n📦 *Your Holdings:* ₹{total:,.0f} (↑₹{abs(change):,.0f}, +{abs(pct):.1f}%)"
-                                elif change < 0:
-                                    portfolio_section = f"\n\n📦 *Your Holdings:* ₹{total:,.0f} (↓₹{abs(change):,.0f}, -{abs(pct):.1f}%)"
-                                else:
-                                    portfolio_section = f"\n\n📦 *Your Holdings:* ₹{total:,.0f}"
-                        except Exception as e:
-                            logger.warning(f"Portfolio snapshot failed for {user.phone_number}: {e}")
-
-                        # Add Trend Scout teaser if there are new designs
-                        if new_designs_count > 0:
-                            trend_teaser = f"\n\n🔥 *{new_designs_count} new designs* added today!\nReply 'trends' to explore."
-                        else:
-                            trend_teaser = ""
-
-                        personalized_brief = greeting + brief_body + threshold_insight + intel_section + portfolio_section + trend_teaser
-
                         phone = f"whatsapp:{user.phone_number}"
-                        sent = await whatsapp_service.send_message(phone, personalized_brief)
-
+                        sent = await whatsapp_service.send_message(phone, brief)
                         if sent:
                             success_count += 1
-                            logger.info(f"SENT to {name} ({user.phone_number})")
-                        else:
-                            logger.error(f"FAILED to send to {name} ({user.phone_number})")
+                            logger.info(f"SENT to {user.name} ({user.phone_number})")
 
                     except Exception as e:
                         logger.error(f"Error sending to {user.phone_number}: {e}")
 
-                # Clear cached intel after sending
                 self._cached_market_intel = ""
-
-                logger.info("=" * 50)
                 logger.info(f"MORNING BRIEF COMPLETE: {success_count}/{len(users)} sent")
-                logger.info("=" * 50)
 
         except Exception as e:
-            logger.error(f"Error in morning brief job: {e}")
+            logger.error(f"Morning brief error: {e}")
+
+    async def _build_flowing_brief(
+        self, db, user, gold_24k, change_24k, silver, rate, analysis, market_intel
+    ):
+        """Build a single flowing message that feels like a smart friend texting you."""
+        name = user.name or "Friend"
+        parts = []
+
+        # --- LINE 1: Greeting + headline rate ---
+        if change_24k > 0:
+            parts.append(f"Morning {name}! Gold *₹{gold_24k:,.0f}* (↑₹{abs(change_24k):,.0f})")
+        elif change_24k < 0:
+            parts.append(f"Morning {name}! Gold *₹{gold_24k:,.0f}* (↓₹{abs(change_24k):,.0f})")
+        else:
+            parts.append(f"Morning {name}! Gold at *₹{gold_24k:,.0f}*/gm")
+
+        # Silver one-liner
+        if silver > 0:
+            parts.append(f"Silver ₹{silver:,.0f}/gm | 22K ₹{rate.gold_22k:,.0f}")
+
+        # --- PORTFOLIO (if they have holdings) ---
+        try:
+            portfolio = await background_agent.get_portfolio_summary(db, user.id)
+            if "error" not in portfolio and portfolio.get("holdings"):
+                total = portfolio["total_value"]
+                change = portfolio["total_change"]
+                # Format total nicely (lakhs/crores)
+                if total >= 10000000:
+                    total_str = f"₹{total/10000000:.1f}Cr"
+                elif total >= 100000:
+                    total_str = f"₹{total/100000:.1f}L"
+                else:
+                    total_str = f"₹{total:,.0f}"
+
+                if change > 0:
+                    parts.append(f"\n📦 Your holdings: {total_str} (+₹{abs(change):,.0f} today)")
+                elif change < 0:
+                    parts.append(f"\n📦 Your holdings: {total_str} (-₹{abs(change):,.0f} today)")
+                else:
+                    parts.append(f"\n📦 Your holdings: {total_str}")
+        except Exception:
+            pass
+
+        # --- THRESHOLD INSIGHT (contextual, not just data) ---
+        try:
+            thresholds = await business_memory_service.get_buy_thresholds(db, user.id)
+            if thresholds.get("buy") and gold_24k:
+                buy_price = thresholds["buy"]
+                diff = gold_24k - buy_price
+                if diff < 0:
+                    parts.append(f"\n💡 Gold is ₹{abs(diff):,.0f} *below* your ₹{buy_price:,.0f} buy target - good time to stock up!")
+                elif diff > 0 and diff < 500:
+                    parts.append(f"\n📊 Gold just ₹{diff:,.0f} above your buy price. Close to your range.")
+        except Exception:
+            pass
+
+        # --- UPCOMING REMINDERS (next 7 days) ---
+        try:
+            upcoming = await reminder_service.get_upcoming_reminders(db, user.id, days=7)
+            if upcoming:
+                r = upcoming[0]  # Most imminent
+                days = r["days_away"]
+                day_word = "tomorrow" if days == 1 else f"in {days} days"
+                relation = f" ({r['relation']})" if r.get("relation") else ""
+                parts.append(f"\n🔔 {r['name']}'s {r['occasion']}{relation} {day_word}")
+        except Exception:
+            pass
+
+        # --- MARKET INTEL (if available) ---
+        if market_intel:
+            # Take just the first 2 bullet points to keep it short
+            intel_lines = [l.strip() for l in market_intel.split("\n") if l.strip().startswith("•")][:2]
+            if intel_lines:
+                parts.append(f"\n🌙 Overnight: " + " ".join(intel_lines))
+
+        # --- CHANGE SUMMARY ---
+        change_parts = []
+        day_pct = analysis.daily_change_percent
+        if day_pct != 0:
+            change_parts.append(f"Day {'↑' if day_pct > 0 else '↓'}{abs(day_pct):.1f}%")
+        if analysis.weekly_change_percent != 0:
+            wp = analysis.weekly_change_percent
+            change_parts.append(f"Week {'+' if wp > 0 else ''}{wp:.1f}%")
+        if change_parts:
+            parts.append(f"\n📈 {' | '.join(change_parts)}")
+
+        # --- SIGN OFF ---
+        parts.append(f"\n_Reply 'gold' for full rates_")
+
+        return "\n".join(parts)
 
     async def scrape_and_cache_rates(self):
         """Scrape and cache rates for major cities, then check price alerts."""

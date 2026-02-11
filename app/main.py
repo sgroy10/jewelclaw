@@ -100,69 +100,145 @@ async def health_check():
 _processed_message_sids = set()
 _max_cached_sids = 1000
 
-# Track users waiting to provide their name for subscription
-_pending_subscribe = {}  # phone_number -> True
-
-
-WELCOME_MESSAGE = """👋 *Welcome to JewelClaw!*
-Your AI-powered jewelry business assistant.
-
-💰 *Gold & Rates:*
-• *gold* - Live gold, silver, platinum rates
-• *subscribe* - Daily 9 AM morning brief
-
-💎 *Quick Quote:*
-• *quote 10g 22k necklace* - Instant bill
-• *price setup* - Set your making charges
-• *price profile* - View your rates
-
-📦 *Portfolio Tracker:*
-• *portfolio* - Holdings value + daily P&L
-• Tell me: "I have 500g 22K gold"
-• Weekly report every Sunday 10 AM
-
-🚨 *Price Alerts:*
-• "Alert me when gold drops below 7000"
-• Instant WhatsApp when price crosses!
-
-🔔 *RemindGenie:*
-• *remind add* Mom | Mother | 15 March
-• *remind list* - View your reminders
-
-💬 *AI Chat:*
-Just talk to me naturally!
-"Should I buy gold today?"
-"Quote me 20g 22k bangles x2"
-"My mom's birthday is 15 March"
-
-• *help* - Show this menu
-• *setup* - Invite others to JewelClaw
-
-Type *gold* to get started!"""
-
-
 # Onboarding instructions - shown when user types "setup"
-ONBOARDING_GUIDE = """🏆 *JewelClaw Setup Guide*
+ONBOARDING_GUIDE = """🏆 *Invite someone to JewelClaw*
 
-Share these steps with anyone who wants to join:
+*Step 1️⃣* Save *+1 (415) 523-8886* as "JewelClaw"
+*Step 2️⃣* Open WhatsApp, start a new chat
+*Step 3️⃣* Send: *join third-find*
 
-*Step 1️⃣ Save this number*
-📱 *+1 (415) 523-8886*
-Save it as "JewelClaw" in contacts
+That's it! They'll get a personalized setup.
 
-*Step 2️⃣ Open WhatsApp*
-Start a new chat with JewelClaw
+_Forward this message to invite jewelers!_"""
 
-*Step 3️⃣ Send join code*
-Type and send exactly:
-👉 *join third-find*
+HELP_MESSAGE = """I'm your AI jewelry assistant. Just talk to me!
 
-*Step 4️⃣ You're in!*
-• Send *gold* - Get live rates
-• Send *subscribe* - Daily 9 AM brief
+Try saying:
+• "What's gold at today?"
+• "Quote me 20g 22k bangles"
+• "I have 500g gold - track it"
+• "Alert me when gold drops below 7000"
+• "My mom's birthday is 15 March"
+• "Show my portfolio"
+• "remind list"
 
-━━━━━━━━━━━━━━━━━━━━━
-_Forward this message to invite others!_"""
+I understand natural language - no commands needed."""
+
+
+async def get_quick_rate_text(db: AsyncSession, city: str = "Mumbai") -> str:
+    """Get a one-line gold rate for greetings."""
+    result = await db.execute(
+        select(MetalRate).where(MetalRate.city == city)
+        .order_by(desc(MetalRate.recorded_at)).limit(1)
+    )
+    rate = result.scalar_one_or_none()
+    if rate:
+        return f"Gold is at *₹{rate.gold_24k:,.0f}/gm* right now."
+    return "I'll have fresh gold rates for you shortly."
+
+
+async def handle_onboarding(db: AsyncSession, user, message_body: str) -> str:
+    """
+    DB-backed 3-step onboarding. No in-memory state needed.
+    Step detection: name is None → step 1, business_type is None → step 2, else → step 3.
+    """
+    text = message_body.strip()
+
+    # Words that are NOT names - greetings, commands, Twilio sandbox join
+    NOT_A_NAME = {
+        "hi", "hello", "hey", "hii", "hiii", "namaste", "help", "menu",
+        "gold", "silver", "subscribe", "unsubscribe", "setup", "start",
+        "onboarding", "trends", "trending", "bridal", "portfolio",
+        "1", "2", "3", "yes", "no", "ok", "okay", "thanks", "thank you",
+    }
+
+    # STEP 1: We need their name
+    if user.name is None:
+        normalized = text.lower().strip()
+        is_name = (
+            len(text) <= 50
+            and not any(c.isdigit() for c in text)
+            and len(text.split()) <= 5
+            and normalized not in NOT_A_NAME
+            and not normalized.startswith("join ")  # Twilio sandbox "join xxx-xxx"
+        )
+
+        if is_name:
+            user.name = text.title()
+            await db.flush()
+            return (
+                f"Great to meet you, *{user.name}*! Quick question -\n\n"
+                f"Are you a:\n"
+                f"1. Jeweler / Retailer\n"
+                f"2. Wholesaler\n"
+                f"3. Just tracking gold prices\n\n"
+                f"_Reply 1, 2, or 3_"
+            )
+        else:
+            # First contact or greeting - ask for name with a gold rate hook
+            rate_text = await get_quick_rate_text(db, user.preferred_city or "Mumbai")
+            return (
+                f"Hi! I'm *JewelClaw* - your personal gold & jewelry assistant.\n\n"
+                f"{rate_text}\n\n"
+                f"What's your name?"
+            )
+
+    # STEP 2: We need their business type
+    if user.business_type is None:
+        btype = None
+        t = text.lower().strip()
+        if t in ("1", "jeweler", "retailer", "jeweller", "retail"):
+            btype = "retailer"
+        elif t in ("2", "wholesaler", "wholesale"):
+            btype = "wholesaler"
+        elif t in ("3", "consumer", "tracking", "personal", "just tracking"):
+            btype = "consumer"
+        else:
+            # Try to infer from natural language
+            if any(w in t for w in ("shop", "store", "retail", "jewel")):
+                btype = "retailer"
+            elif any(w in t for w in ("wholesale", "bulk", "supply")):
+                btype = "wholesaler"
+            else:
+                btype = "consumer"
+
+        user.business_type = btype
+        await db.flush()
+
+        btype_label = {"retailer": "Jeweler/Retailer", "wholesaler": "Wholesaler", "consumer": "Gold Tracker"}.get(btype, btype)
+        return (
+            f"Got it - *{btype_label}*!\n\n"
+            f"Which city are you in?\n"
+            f"Mumbai, Delhi, Bangalore, Chennai - or tell me yours."
+        )
+
+    # STEP 3: We need their city (then complete onboarding)
+    if not user.onboarding_completed:
+        # Parse city from response
+        city_map = {
+            "mumbai": "Mumbai", "bombay": "Mumbai",
+            "delhi": "Delhi", "new delhi": "Delhi",
+            "bangalore": "Bangalore", "bengaluru": "Bangalore",
+            "chennai": "Chennai", "madras": "Chennai",
+            "hyderabad": "Hyderabad", "pune": "Pune",
+            "kolkata": "Kolkata", "calcutta": "Kolkata",
+            "jaipur": "Jaipur", "ahmedabad": "Ahmedabad",
+            "surat": "Surat", "lucknow": "Lucknow",
+        }
+
+        city = city_map.get(text.lower().strip(), text.strip().title())
+        user.preferred_city = city
+        user.onboarding_completed = True
+        user.subscribed_to_morning_brief = True
+        await db.flush()
+
+        return (
+            f"All set, *{user.name}*! Here's what I'll do for you:\n\n"
+            f"📱 *Morning brief at 9 AM* with gold rates for {city}\n"
+            f"🚨 *Price alerts* when gold hits your targets\n"
+            f"💬 *AI chat* - ask me anything about gold or jewelry\n\n"
+            f"Try it now - just say *\"gold\"* or ask me anything!"
+        )
 
 
 async def store_conversation(db: AsyncSession, user_id: int, role: str, message: str):
@@ -237,45 +313,45 @@ async def whatsapp_webhook(
         # Phase 1: Store incoming message with intelligence
         await store_conversation(db, user.id, "user", message_body)
 
-        # Check if user is providing their name for subscription
-        if phone_number in _pending_subscribe:
-            # User is responding with their name
-            name = message_body.strip()[:50]  # Limit name length
-            user.name = name
-            user.subscribed_to_morning_brief = True
+        # MIGRATION: Existing users with name but not onboarded → auto-complete
+        if not user.onboarding_completed and user.name and not is_new_user:
+            user.onboarding_completed = True
+            if not user.subscribed_to_morning_brief:
+                user.subscribed_to_morning_brief = True
             await db.flush()
-            del _pending_subscribe[phone_number]
-            logger.info(f"SUBSCRIBED: {phone_number} as '{name}'")
-            response = f"✅ Welcome {name}! You'll receive the morning brief at 9 AM IST daily."
-        else:
-            # AI Agent routing (with feature flag)
-            if settings.enable_ai_agent:
-                classification, confidence = agent_service.classify_message(message_body)
-                logger.info(f"CLASSIFY: '{classification}' (confidence={confidence})")
+            logger.info(f"AUTO-MIGRATED existing user {user.phone_number} to onboarded")
 
-                if classification == "ai_conversation":
-                    # AI PATH: natural language -> Claude with tools
-                    logger.info("AI PATH: routing to agent_service")
-                    response = await agent_service.handle_message(db, user, message_body)
-                else:
-                    # FAST PATH: mapped to existing command handler
-                    command = whatsapp_service.parse_command(message_body)
-                    if command:
-                        logger.info(f"FAST PATH: command={command}")
-                        response = await handle_command(db, user, command, phone_number, is_new_user, message_body)
-                    else:
-                        # Classifier found a fuzzy match but parse_command didn't
-                        # For commands needing args (like, skip, search), use normalized message body
-                        fuzzy_cmd = classification
-                        if classification in ("like", "skip", "search"):
-                            fuzzy_cmd = message_body.lower().strip()
-                        logger.info(f"FUZZY PATH: classification={classification}, cmd={fuzzy_cmd}")
-                        response = await handle_command(db, user, fuzzy_cmd, phone_number, is_new_user, message_body)
+        # ONBOARDING: If user hasn't completed onboarding, guide them through it
+        if not user.onboarding_completed:
+            # But let them use "gold" command even during onboarding
+            normalized = message_body.lower().strip()
+            if normalized in ("gold", "gold rate", "gold rates", "sona"):
+                response = await handle_command(db, user, "gold_rate", phone_number, False, message_body)
             else:
-                # Legacy: original command handling
+                response = await handle_onboarding(db, user, message_body)
+                logger.info(f"ONBOARDING: step completed for {phone_number}")
+        else:
+            # MAIN ROUTING: Onboarded user
+            classification, confidence = agent_service.classify_message(message_body)
+            logger.info(f"CLASSIFY: '{classification}' (confidence={confidence})")
+
+            if classification == "ai_conversation":
+                # AI PATH: natural language -> Claude with tools
+                logger.info("AI PATH: routing to agent_service")
+                response = await agent_service.handle_message(db, user, message_body)
+            else:
+                # FAST PATH: mapped to existing command handler
                 command = whatsapp_service.parse_command(message_body)
-                logger.info(f"COMMAND: {command}")
-                response = await handle_command(db, user, command, phone_number, is_new_user, message_body)
+                if command:
+                    logger.info(f"FAST PATH: command={command}")
+                    response = await handle_command(db, user, command, phone_number, False, message_body)
+                else:
+                    # Fuzzy match from classifier
+                    fuzzy_cmd = classification
+                    if classification in ("like", "skip"):
+                        fuzzy_cmd = message_body.lower().strip()
+                    logger.info(f"FUZZY PATH: classification={classification}, cmd={fuzzy_cmd}")
+                    response = await handle_command(db, user, fuzzy_cmd, phone_number, False, message_body)
 
             logger.info(f"RESPONSE LENGTH: {len(response) if response else 0}")
 
@@ -299,12 +375,21 @@ async def whatsapp_webhook(
 
 
 async def handle_command(db: AsyncSession, user, command: str, phone_number: str, is_new_user: bool = False, message_body: str = "") -> str:
-    """Handle commands: hi/hello, gold, subscribe, unsubscribe, help."""
+    """Handle fast-path commands for onboarded users."""
     city = user.preferred_city or "Mumbai"
 
-    # 1. NEW USER or HI/HELLO → Welcome message
-    if is_new_user or command == "greeting":
-        return WELCOME_MESSAGE
+    # GREETING → Smart response with live rate
+    if command == "greeting":
+        name = user.name or "there"
+        rate_text = await get_quick_rate_text(db, city)
+        return (
+            f"Hey {name}! {rate_text}\n\n"
+            f"What do you need? Just ask - or type *gold* for full rates."
+        )
+
+    # HELP → Conversational, not a menu dump
+    if command == "help":
+        return HELP_MESSAGE
 
     # 2. GOLD → Show gold rates
     if command == "gold_rate":
@@ -333,27 +418,21 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
             return metal_service.format_morning_brief(rate, analysis, expert_analysis)
         return "Unable to fetch gold rates. Please try again."
 
-    # 3. SUBSCRIBE → Ask for name, then save
+    # SUBSCRIBE
     if command == "subscribe":
-        if user.subscribed_to_morning_brief and user.name:
-            return f"✅ You're already subscribed as {user.name}!"
-        # Ask for name
-        _pending_subscribe[phone_number] = True
-        logger.info(f"Asking name from {phone_number} for subscription")
-        return "What's your name?"
+        if user.subscribed_to_morning_brief:
+            return f"You're already subscribed, {user.name or 'friend'}! You'll get the morning brief at 9 AM."
+        user.subscribed_to_morning_brief = True
+        await db.flush()
+        return f"Done! You'll get a personalized gold brief every morning at 9 AM."
 
-    # 4. UNSUBSCRIBE → Remove from daily brief
+    # UNSUBSCRIBE
     if command == "unsubscribe":
         user.subscribed_to_morning_brief = False
         await db.flush()
-        logger.info(f"UNSUBSCRIBED: {phone_number}")
-        return "❌ Unsubscribed from daily briefs"
+        return "Unsubscribed from morning briefs. You can still ask me for gold rates anytime."
 
-    # 5. HELP → Show welcome message
-    if command == "help":
-        return WELCOME_MESSAGE
-
-    # 6. SETUP → Show onboarding guide
+    # SETUP → Invite guide
     if command == "setup":
         return ONBOARDING_GUIDE
 
@@ -437,14 +516,12 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
     if command == "remind" or command.startswith("remind"):
         return await handle_remind_command(db, user, message_body)
 
-    # Unknown command → Route through AI if enabled, else show welcome
-    if settings.enable_ai_agent:
-        try:
-            return await agent_service.handle_message(db, user, message_body)
-        except Exception as e:
-            logger.error(f"AI fallback error: {e}")
-            return WELCOME_MESSAGE
-    return WELCOME_MESSAGE
+    # Unknown command → Route to AI agent
+    try:
+        return await agent_service.handle_message(db, user, message_body)
+    except Exception as e:
+        logger.error(f"AI fallback error: {e}")
+        return "Something went wrong. Try asking me again, or type *gold* for rates."
 
 
 async def handle_trends_command(db: AsyncSession, user, phone_number: str) -> str:
