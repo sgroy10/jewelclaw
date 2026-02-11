@@ -201,17 +201,26 @@ class SchedulerService:
         name = user.name or "Friend"
         parts = []
 
-        # --- LINE 1: Greeting + headline rate ---
-        if change_24k > 0:
-            parts.append(f"Morning {name}! Gold *₹{gold_24k:,.0f}* (↑₹{abs(change_24k):,.0f})")
-        elif change_24k < 0:
-            parts.append(f"Morning {name}! Gold *₹{gold_24k:,.0f}* (↓₹{abs(change_24k):,.0f})")
-        else:
-            parts.append(f"Morning {name}! Gold at *₹{gold_24k:,.0f}*/gm")
+        # --- GREETING ---
+        parts.append(f"Morning {name}!")
 
-        # Silver one-liner
+        # --- GOLD RATES WITH CHANGE PER KARAT ---
+        gold_22k = rate.gold_22k or 0
+        gold_18k = rate.gold_18k or 0
+        change_22k = round(change_24k * 0.916) if change_24k else 0
+        change_18k = round(change_24k * 0.75) if change_24k else 0
+
+        def _arrow(val):
+            if val > 0: return f"↑₹{abs(val):,.0f}"
+            elif val < 0: return f"↓₹{abs(val):,.0f}"
+            return "→"
+
+        parts.append(f"24K: *₹{gold_24k:,.0f}* ({_arrow(change_24k)})")
+        parts.append(f"22K: *₹{gold_22k:,.0f}* ({_arrow(change_22k)})")
+        if gold_18k:
+            parts.append(f"18K: *₹{gold_18k:,.0f}* ({_arrow(change_18k)})")
         if silver > 0:
-            parts.append(f"Silver ₹{silver:,.0f}/gm | 22K ₹{rate.gold_22k:,.0f}")
+            parts.append(f"Silver: *₹{silver:,.0f}*/gm")
 
         # --- PORTFOLIO (if they have holdings) ---
         try:
