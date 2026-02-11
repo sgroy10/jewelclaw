@@ -537,49 +537,54 @@ class MetalService:
 
     async def fetch_all_rates(self, city: str = "mumbai") -> Optional[MetalRateData]:
         """Fetch all metal rates including international prices."""
-        # Scrape gold rates
+        # Get gold rates (international API primary, GoodReturns fallback)
         rates = await self.scrape_gold_rates(city)
         if not rates:
             return None
 
-        # Scrape silver
-        silver_result = await self.scrape_silver_rate(city)
-        if silver_result:
-            rates.silver, rates.yesterday_silver = silver_result
-
-        # Fetch international prices first (needed for platinum calculation)
+        # Fetch international prices (needed for silver, platinum, MCX)
         intl = await self.fetch_international_prices()
         rates.gold_usd_oz = intl.get("gold_usd_oz")
         rates.silver_usd_oz = intl.get("silver_usd_oz")
         rates.platinum_usd_oz = intl.get("platinum_usd_oz")
         rates.usd_inr = intl.get("usd_inr")
 
-        # Scrape platinum from GoodReturns (may not exist)
+        # Silver: try scrape first, then calculate from international API
+        silver_result = await self.scrape_silver_rate(city)
+        if silver_result:
+            rates.silver, rates.yesterday_silver = silver_result
+        elif rates.silver_usd_oz and rates.usd_inr:
+            # Calculate Indian silver from international spot
+            # India silver premium: ~20% (import duty 15% + GST 3% + margin 2%)
+            SILVER_INDIA_PREMIUM = 1.20
+            silver_spot_per_gram = (rates.silver_usd_oz * rates.usd_inr) / TROY_OZ_TO_GRAM
+            rates.silver = round(silver_spot_per_gram * SILVER_INDIA_PREMIUM)
+            rates.yesterday_silver = round(rates.silver * 0.997)
+            logger.info(f"INTL API Silver: ₹{rates.silver}/gm (spot=${rates.silver_usd_oz:.2f}/oz)")
+
+        # Platinum: try scrape first, then calculate from international API
         platinum = await self.scrape_platinum_rate()
         if platinum:
             rates.platinum = platinum
         elif rates.platinum_usd_oz and rates.usd_inr:
-            # Calculate from international price if local scraping fails
-            # Convert USD/oz to INR/gram with ~8% retail markup
             platinum_per_gram = (rates.platinum_usd_oz * rates.usd_inr) / TROY_OZ_TO_GRAM
             rates.platinum = round(platinum_per_gram * 1.08)
+            logger.info(f"INTL API Platinum: ₹{rates.platinum}/gm")
 
-        # Scrape MCX futures (or estimate from spot prices)
+        # MCX futures: try scrape, else estimate from spot
         mcx = await self.scrape_mcx_futures()
         if mcx.get("gold_futures"):
             rates.mcx_gold_futures = mcx.get("gold_futures")
             rates.mcx_gold_futures_expiry = mcx.get("gold_expiry")
         else:
-            # Estimate MCX gold futures from spot (typically 0.5-1% premium)
-            rates.mcx_gold_futures = round(rates.gold_24k * 10 * 1.005)  # Per 10gm with 0.5% premium
+            rates.mcx_gold_futures = round(rates.gold_24k * 10 * 1.005)
             rates.mcx_gold_futures_expiry = datetime.now().strftime("%b")
 
         if mcx.get("silver_futures"):
             rates.mcx_silver_futures = mcx.get("silver_futures")
             rates.mcx_silver_futures_expiry = mcx.get("silver_expiry")
-        else:
-            # Estimate MCX silver futures from spot
-            rates.mcx_silver_futures = round(rates.silver * 1000 * 1.005)  # Per kg with 0.5% premium
+        elif rates.silver and rates.silver > 0:
+            rates.mcx_silver_futures = round(rates.silver * 1000 * 1.005)
             rates.mcx_silver_futures_expiry = datetime.now().strftime("%b")
 
         return rates
@@ -962,6 +967,21 @@ Example good output:
                 "",
             ])
 
+        # Calculate silver daily change
+        silver_change = 0
+        silver_change_text = ""
+        if scraped_data:
+            yesterday_silver = getattr(scraped_data, 'yesterday_silver', None)
+            if yesterday_silver and yesterday_silver > 0 and silver > 0:
+                silver_change = silver - yesterday_silver
+                silver_pct = (silver_change / yesterday_silver) * 100
+                if silver_change > 0:
+                    silver_change_text = f" ↑₹{abs(silver_change):,.0f} (+{abs(silver_pct):.1f}%)"
+                elif silver_change < 0:
+                    silver_change_text = f" ↓₹{abs(silver_change):,.0f} (-{abs(silver_pct):.1f}%)"
+                else:
+                    silver_change_text = " → No change"
+
         lines.extend([
             "💰 *GOLD* (₹/gram)",
             f"24K: ₹{gold_24k:,.0f} {change_text_24k}",
@@ -970,7 +990,7 @@ Example good output:
             f"14K: ₹{gold_14k:,.0f} {change_text_14k}",
             "",
             "🪙 *SILVER*",
-            f"₹{silver:,.0f}/gram | ₹{silver * 1000:,.0f}/kg",
+            f"₹{silver:,.0f}/gram | ₹{silver * 1000:,.0f}/kg{silver_change_text}",
             "",
             "⚪ *PLATINUM*",
             f"₹{platinum:,.0f}/gram",
