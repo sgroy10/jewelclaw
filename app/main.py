@@ -569,19 +569,20 @@ async def whatsapp_webhook(
             response = await handle_image_upload(db, user, media_url, message_body, phone_number)
         else:
             # MAIN ROUTING: Onboarded user
-            classification, confidence = agent_service.classify_message(message_body)
-            logger.info(f"CLASSIFY: '{classification}' (confidence={confidence})")
-
-            if classification == "ai_conversation":
-                # AI PATH: natural language -> Claude with tools
-                logger.info("AI PATH: routing to agent_service")
-                response = await agent_service.handle_message(db, user, message_body)
+            # Check fast-path commands FIRST (before classifier)
+            command = whatsapp_service.parse_command(message_body)
+            if command:
+                logger.info(f"FAST PATH: command={command}")
+                response = await handle_command(db, user, command, phone_number, False, message_body)
             else:
-                # FAST PATH: mapped to existing command handler
-                command = whatsapp_service.parse_command(message_body)
-                if command:
-                    logger.info(f"FAST PATH: command={command}")
-                    response = await handle_command(db, user, command, phone_number, False, message_body)
+                # No exact command match → classify with AI
+                classification, confidence = agent_service.classify_message(message_body)
+                logger.info(f"CLASSIFY: '{classification}' (confidence={confidence})")
+
+                if classification == "ai_conversation":
+                    # AI PATH: natural language -> Claude with tools
+                    logger.info("AI PATH: routing to agent_service")
+                    response = await agent_service.handle_message(db, user, message_body)
                 else:
                     # Fuzzy match from classifier
                     fuzzy_cmd = classification
