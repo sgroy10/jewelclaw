@@ -268,6 +268,10 @@ class SchedulerService:
             if intel_lines:
                 parts.append(f"\n🌙 Overnight: " + " ".join(intel_lines))
 
+        # --- EXPERT ONE-LINER ---
+        if analysis.recommendation_text:
+            parts.append(f"\n💡 {analysis.recommendation_text}")
+
         # --- CHANGE SUMMARY ---
         change_parts = []
         day_pct = analysis.daily_change_percent
@@ -277,7 +281,7 @@ class SchedulerService:
             wp = analysis.weekly_change_percent
             change_parts.append(f"Week {'+' if wp > 0 else ''}{wp:.1f}%")
         if change_parts:
-            parts.append(f"\n📈 {' | '.join(change_parts)}")
+            parts.append(f"📈 {' | '.join(change_parts)}")
 
         # --- SIGN OFF ---
         parts.append(f"\n_Reply 'gold' for full rates_")
