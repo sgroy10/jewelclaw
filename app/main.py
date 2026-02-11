@@ -44,6 +44,19 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     logger.info(f"Starting {settings.app_name}...")
     await init_db()
+
+    # Run schema migrations for new columns on existing tables
+    try:
+        from sqlalchemy import text
+        from app.database import engine
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                "ALTER TABLE designs ADD COLUMN IF NOT EXISTS source_type VARCHAR(30) DEFAULT 'product'"
+            ))
+            logger.info("Schema migration: source_type column ensured on designs")
+    except Exception as e:
+        logger.warning(f"Schema migration skipped: {e}")
+
     scheduler_service.start()
 
     # Configure Cloudinary if credentials available
