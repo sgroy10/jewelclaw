@@ -612,10 +612,9 @@ async def whatsapp_webhook(request: Request):
 async def generate_stats_message(db: AsyncSession) -> str:
     """Generate WhatsApp-formatted stats for admin."""
     from datetime import datetime, timedelta
-    import pytz
 
-    ist = pytz.timezone("Asia/Kolkata")
-    now = datetime.now(ist)
+    now = datetime.utcnow()
+    now_ist = now + timedelta(hours=5, minutes=30)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_ago = now - timedelta(days=7)
 
@@ -664,7 +663,7 @@ async def generate_stats_message(db: AsyncSession) -> str:
 
     lines = [
         f"*JewelClaw Dashboard*",
-        f"_{now.strftime('%d %b %Y, %I:%M %p IST')}_",
+        f"_{now_ist.strftime('%d %b %Y, %I:%M %p IST')}_",
         "",
         f"*Users:* {total} total | {new_today} today | {new_week} this week",
         f"*Onboarded:* {onboarded} | *Brief subs:* {subscribers}",
@@ -1293,10 +1292,8 @@ async def get_subscribers(db: AsyncSession = Depends(get_db)):
 async def admin_stats(db: AsyncSession = Depends(get_db)):
     """Launch dashboard — real-time stats for tracking growth."""
     from datetime import datetime, timedelta
-    import pytz
 
-    ist = pytz.timezone("Asia/Kolkata")
-    now = datetime.now(ist)
+    now = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_ago = now - timedelta(days=7)
 
@@ -1377,7 +1374,7 @@ async def admin_stats(db: AsyncSession = Depends(get_db)):
     recent_users = recent_result.scalars().all()
 
     return {
-        "as_of": now.strftime("%d %b %Y, %I:%M %p IST"),
+        "as_of": (now + timedelta(hours=5, minutes=30)).strftime("%d %b %Y, %I:%M %p IST"),
         "users": {
             "total": total_users,
             "new_today": new_today,
