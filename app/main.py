@@ -2000,6 +2000,60 @@ async def trigger_morning_brief():
     return {"status": "triggered"}
 
 
+@app.get("/admin/debug/morning-brief")
+async def debug_morning_brief(db: AsyncSession = Depends(get_db)):
+    """Debug morning brief - check each step without sending."""
+    debug = {}
+
+    # Step 1: Check subscribers
+    users = await whatsapp_service.get_subscribed_users(db)
+    debug["subscribers"] = [
+        {"id": u.id, "phone": u.phone_number, "name": u.name, "subscribed": u.subscribed_to_morning_brief}
+        for u in users
+    ]
+    debug["subscriber_count"] = len(users)
+
+    # Step 2: Check rate scraping
+    try:
+        scraped_data = await metal_service.fetch_all_rates("mumbai")
+        debug["rate_scrape"] = "OK" if scraped_data else "FAILED - returned None"
+        if scraped_data:
+            debug["gold_24k"] = getattr(scraped_data, 'gold_24k', 'N/A')
+    except Exception as e:
+        debug["rate_scrape"] = f"ERROR: {str(e)}"
+
+    # Step 3: Check DB rate
+    try:
+        rate = await metal_service.get_current_rates(db, "Mumbai")
+        debug["db_rate"] = "OK" if rate else "No rate in DB"
+        if rate:
+            debug["db_gold_24k"] = rate.gold_24k
+            debug["db_rate_date"] = rate.rate_date
+    except Exception as e:
+        debug["db_rate"] = f"ERROR: {str(e)}"
+
+    # Step 4: Check Twilio config
+    debug["twilio_sid"] = settings.twilio_account_sid[:10] + "..." if settings.twilio_account_sid else "NOT SET"
+    debug["twilio_token"] = "SET" if settings.twilio_auth_token else "NOT SET"
+    debug["twilio_number"] = settings.twilio_whatsapp_number
+
+    return debug
+
+
+@app.get("/admin/debug/send-test/{phone}")
+async def debug_send_test(phone: str):
+    """Send a test WhatsApp message to verify Twilio works."""
+    try:
+        result = await whatsapp_service.send_message(
+            f"whatsapp:{phone}",
+            "✅ *JewelClaw Test*\nIf you see this, WhatsApp messaging works!"
+        )
+        return {"sent": result, "to": phone}
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "detail": traceback.format_exc()}
+
+
 # =============================================================================
 # OPENCLAW ENDPOINTS - Price Tracking, Alerts, Intelligence
 # =============================================================================
