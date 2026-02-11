@@ -29,6 +29,7 @@ from app.services.alerts_service import alerts_service
 from app.services.lookbook_service import lookbook_service
 from app.services.reminder_service import reminder_service
 from app.services.pricing_engine_service import pricing_engine
+from app.services.background_agent_service import background_agent
 
 # Configure logging
 logging.basicConfig(
@@ -109,23 +110,26 @@ Your AI-powered jewelry industry assistant.
 *Commands:*
 • *gold* - Live gold rates + expert analysis
 • *trends* - Trending jewelry designs
-• *search [query]* - Live search (e.g. search bridal necklace)
-• *like [id]* - Save a design to lookbook
-• *lookbook* - View saved designs
-• *pdf* - Generate lookbook PDF
-• *alerts* - View your price drop alerts
+• *search [query]* - Live search
 • *subscribe* - Daily 9 AM morning brief
 
 💎 *Quick Quote:*
 • *quote* 10g 22k necklace - Instant bill
 • *price setup* - Set your making charges
-• *price profile* - View your rates
+
+📦 *Portfolio Tracker:*
+• *portfolio* - Your holdings value + P&L
+• Tell me: "I have 500g 22K gold, 2kg silver"
+• Weekly reports every Sunday
+
+🚨 *Price Alerts:*
+• "Alert me when gold drops below 7000"
+• Instant WhatsApp - even at 2 AM!
 
 🔔 *RemindGenie:*
 • *remind list* - View your reminders
 • *remind add* Mom | Mother | 15 March
 • *remind festivals* - Load Indian festivals
-• *remind delete [id]* - Remove a reminder
 
 • *setup* - How to join JewelClaw
 • *help* - Show this menu
@@ -440,6 +444,19 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
 
     if command in ("price setup", "price profile", "pricing") or command.startswith("price set") or command.startswith("price "):
         return await handle_price_command(db, user, message_body)
+
+    # ==========================================================================
+    # PORTFOLIO / INVENTORY COMMANDS
+    # ==========================================================================
+
+    if command in ("portfolio", "holdings", "my holdings", "inventory"):
+        return await handle_portfolio_command(db, user)
+
+    if command == "inventory_update":
+        return await handle_inventory_update_command(db, user, message_body)
+
+    if command == "clear_inventory":
+        return await handle_clear_inventory_command(db, user)
 
     # ==========================================================================
     # REMINDGENIE COMMANDS
@@ -964,6 +981,85 @@ remind add Papa | Father | 5 August
 JewelClaw remembers forever! You'll get greetings at 12:01 AM and 8:00 AM with ready-to-send messages.
 
 _Your customers will love you for never forgetting!_"""
+
+
+async def handle_portfolio_command(db: AsyncSession, user) -> str:
+    """Handle portfolio/holdings/inventory view command."""
+    try:
+        portfolio = await background_agent.get_portfolio_summary(db, user.id)
+        return background_agent.format_portfolio_message(portfolio)
+    except Exception as e:
+        logger.error(f"Portfolio command error: {e}")
+        return "Error loading portfolio. Try again."
+
+
+async def handle_inventory_update_command(db: AsyncSession, user, message_body: str) -> str:
+    """Handle natural language inventory updates like 'I have 500g 22K gold'."""
+    try:
+        items = background_agent.parse_inventory_input(message_body)
+        if not items:
+            return """📦 *How to set your inventory:*
+
+Tell me what you hold:
+• "I have 500g 22K gold"
+• "I have 200g gold and 5kg silver"
+• "I hold 1kg 24K gold, 10kg silver, 50g platinum"
+
+_I'll track your portfolio value daily and send weekly reports!_"""
+
+        results = []
+        for item in items:
+            await background_agent.store_inventory(
+                db, user.id,
+                metal=item["metal"],
+                weight_grams=item["weight_grams"],
+                karat=item["karat"],
+            )
+            if item["weight_grams"] >= 1000:
+                wt = f"{item['weight_grams']/1000:.1f}kg"
+            else:
+                wt = f"{item['weight_grams']:.0f}g"
+            karat_str = f" {item['karat'].upper()}" if item["metal"] == "gold" else ""
+            results.append(f"• {wt}{karat_str} {item['metal'].title()}")
+
+        # Get portfolio value
+        portfolio = await background_agent.get_portfolio_summary(db, user.id)
+
+        response = f"✅ *Inventory Updated!*\n\n" + "\n".join(results)
+        if "error" not in portfolio:
+            response += f"\n\n💰 *Total Value: ₹{portfolio['total_value']:,.0f}*"
+            if portfolio["total_change"] != 0:
+                ch = portfolio["total_change"]
+                if ch > 0:
+                    response += f"\nToday: +₹{abs(ch):,.0f} (+{abs(portfolio['total_change_pct']):.1f}%)"
+                else:
+                    response += f"\nToday: -₹{abs(ch):,.0f} (-{abs(portfolio['total_change_pct']):.1f}%)"
+            response += "\n\n_Weekly report every Sunday. Type 'portfolio' anytime._"
+
+        return response
+
+    except Exception as e:
+        logger.error(f"Inventory update error: {e}")
+        return "Error updating inventory. Try again."
+
+
+async def handle_clear_inventory_command(db: AsyncSession, user) -> str:
+    """Clear all inventory holdings for a user."""
+    try:
+        from app.services.business_memory_service import business_memory_service
+
+        memories = await business_memory_service.get_user_memory(db, user.id, category="inventory")
+        if not memories:
+            return "No inventory to clear."
+
+        for mem in memories:
+            mem.is_active = False
+
+        await db.flush()
+        return f"🗑️ Cleared {len(memories)} inventory items. Portfolio tracking paused."
+    except Exception as e:
+        logger.error(f"Clear inventory error: {e}")
+        return "Error clearing inventory. Try again."
 
 
 async def handle_create_lookbook_command(db: AsyncSession, user, name: str = None) -> str:

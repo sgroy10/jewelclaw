@@ -114,6 +114,14 @@ COMMANDS = {
     "saved": "lookbook",
     "favorites": "lookbook",
 
+    # Portfolio / Inventory
+    "portfolio": "portfolio",
+    "holdings": "portfolio",
+    "my holdings": "portfolio",
+    "inventory": "portfolio",
+    "my stock": "portfolio",
+    "clear inventory": "clear_inventory",
+
     # Live search (Playwright)
     "search": "search",
     "find": "search",

@@ -17,6 +17,7 @@ from app.services.api_scraper import api_scraper
 from app.services.image_service import image_service
 from app.services.business_memory_service import business_memory_service
 from app.services.reminder_service import reminder_service
+from app.services.background_agent_service import background_agent
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class SchedulerService:
     def __init__(self):
         self.scheduler = None
         self._initialized = False
+        self._cached_market_intel = ""  # Gathered at midnight, used in morning brief
 
     def _ensure_initialized(self):
         """Lazy initialize scheduler when needed."""
@@ -90,6 +92,33 @@ class SchedulerService:
             replace_existing=True
         )
 
+        # Market Intelligence: Gather news at midnight IST for morning brief
+        self.scheduler.add_job(
+            self.gather_overnight_intelligence,
+            CronTrigger(
+                hour=0,
+                minute=30,
+                timezone=IST
+            ),
+            id="market_intelligence",
+            name="Overnight Market Intelligence",
+            replace_existing=True
+        )
+
+        # Weekly Portfolio Report: Sunday 10 AM IST
+        self.scheduler.add_job(
+            self.send_weekly_portfolio_reports,
+            CronTrigger(
+                day_of_week="sun",
+                hour=10,
+                minute=0,
+                timezone=IST
+            ),
+            id="weekly_portfolio",
+            name="Weekly Portfolio Report",
+            replace_existing=True
+        )
+
         logger.info("Scheduled jobs configured")
 
     def start(self):
@@ -146,6 +175,9 @@ class SchedulerService:
                     expert_analysis = await metal_service.get_cached_expert_analysis(cached_data, analysis)
                     scraped_data = cached_data
 
+                # Get overnight market intelligence (gathered at midnight)
+                market_intel = self._cached_market_intel or ""
+
                 # Get subscribed users
                 users = await whatsapp_service.get_subscribed_users(db)
                 logger.info(f"Found {len(users)} subscribed users")
@@ -186,13 +218,35 @@ class SchedulerService:
                         except Exception as e:
                             logger.warning(f"Threshold check failed for {user.phone_number}: {e}")
 
+                        # Overnight market intelligence section
+                        intel_section = ""
+                        if market_intel:
+                            intel_section = f"\n\n🌙 *WHILE YOU SLEPT*\n{market_intel}"
+
+                        # Portfolio snapshot for users with inventory
+                        portfolio_section = ""
+                        try:
+                            portfolio = await background_agent.get_portfolio_summary(db, user.id)
+                            if "error" not in portfolio and portfolio.get("holdings"):
+                                total = portfolio["total_value"]
+                                change = portfolio["total_change"]
+                                pct = portfolio["total_change_pct"]
+                                if change > 0:
+                                    portfolio_section = f"\n\n📦 *Your Holdings:* ₹{total:,.0f} (↑₹{abs(change):,.0f}, +{abs(pct):.1f}%)"
+                                elif change < 0:
+                                    portfolio_section = f"\n\n📦 *Your Holdings:* ₹{total:,.0f} (↓₹{abs(change):,.0f}, -{abs(pct):.1f}%)"
+                                else:
+                                    portfolio_section = f"\n\n📦 *Your Holdings:* ₹{total:,.0f}"
+                        except Exception as e:
+                            logger.warning(f"Portfolio snapshot failed for {user.phone_number}: {e}")
+
                         # Add Trend Scout teaser if there are new designs
                         if new_designs_count > 0:
                             trend_teaser = f"\n\n🔥 *{new_designs_count} new designs* added today!\nReply 'trends' to explore."
                         else:
                             trend_teaser = ""
 
-                        personalized_brief = greeting + brief_body + threshold_insight + trend_teaser
+                        personalized_brief = greeting + brief_body + threshold_insight + intel_section + portfolio_section + trend_teaser
 
                         phone = f"whatsapp:{user.phone_number}"
                         sent = await whatsapp_service.send_message(phone, personalized_brief)
@@ -206,6 +260,9 @@ class SchedulerService:
                     except Exception as e:
                         logger.error(f"Error sending to {user.phone_number}: {e}")
 
+                # Clear cached intel after sending
+                self._cached_market_intel = ""
+
                 logger.info("=" * 50)
                 logger.info(f"MORNING BRIEF COMPLETE: {success_count}/{len(users)} sent")
                 logger.info("=" * 50)
@@ -214,24 +271,38 @@ class SchedulerService:
             logger.error(f"Error in morning brief job: {e}")
 
     async def scrape_and_cache_rates(self):
-        """Scrape and cache rates for major cities."""
+        """Scrape and cache rates for major cities, then check price alerts."""
         logger.info("Starting rate scraping job")
 
         try:
             async with get_db_session() as db:
                 cities = ["Mumbai", "Delhi", "Bangalore", "Chennai"]
                 cities_scraped = 0
+                mumbai_rate = None
 
                 for city in cities:
                     try:
                         rate = await metal_service.get_current_rates(db, city, force_refresh=True)
                         if rate:
                             cities_scraped += 1
+                            if city == "Mumbai":
+                                mumbai_rate = rate
                     except Exception as e:
                         logger.error(f"Error scraping {city}: {e}")
 
                 await db.commit()
                 logger.info(f"Scraped rates for {cities_scraped} cities")
+
+                # Check price threshold alerts after scraping
+                if mumbai_rate:
+                    try:
+                        await background_agent.check_price_alerts(
+                            db,
+                            gold_24k=mumbai_rate.gold_24k,
+                            silver=mumbai_rate.silver or 0,
+                        )
+                    except Exception as e:
+                        logger.error(f"Price alert check failed: {e}")
 
         except Exception as e:
             logger.error(f"Error in rate scraping job: {e}")
@@ -423,6 +494,37 @@ class SchedulerService:
                 logger.error(f"RemindGenie error for {user.phone_number}: {e}")
 
         return sent_count
+
+    async def gather_overnight_intelligence(self):
+        """Gather market news at midnight, cache for morning brief."""
+        logger.info("=" * 50)
+        logger.info("OVERNIGHT INTELLIGENCE: Gathering market news")
+        logger.info("=" * 50)
+
+        try:
+            summary = await background_agent.gather_market_intelligence()
+            if summary:
+                self._cached_market_intel = summary
+                logger.info(f"Market intel cached: {len(summary)} chars")
+            else:
+                self._cached_market_intel = ""
+                logger.info("No market intel gathered")
+        except Exception as e:
+            logger.error(f"Market intelligence error: {e}")
+            self._cached_market_intel = ""
+
+    async def send_weekly_portfolio_reports(self):
+        """Send weekly portfolio reports to users with inventory (Sunday 10 AM)."""
+        logger.info("=" * 50)
+        logger.info("WEEKLY PORTFOLIO REPORT - Sunday")
+        logger.info("=" * 50)
+
+        try:
+            async with get_db_session() as db:
+                sent = await background_agent.generate_weekly_portfolio_report(db)
+                logger.info(f"Weekly portfolio reports sent: {sent}")
+        except Exception as e:
+            logger.error(f"Weekly portfolio report error: {e}")
 
     async def trigger_morning_brief_now(self):
         """Manually trigger morning brief."""

@@ -22,6 +22,7 @@ from app.models import User, Conversation, BusinessMemory, MetalRate
 from app.services.business_memory_service import business_memory_service
 from app.services.reminder_service import reminder_service
 from app.services.pricing_engine_service import pricing_engine
+from app.services.background_agent_service import background_agent
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ EXACT_COMMANDS = {
     "alerts", "pdf", "lookbook pdf", "create pdf",
     "remind", "remind list", "remind festivals",
     "quote", "price setup", "price profile", "pricing",
+    "portfolio", "inventory", "holdings", "my holdings",
 }
 
 # Fuzzy patterns that map to existing commands
@@ -58,6 +60,9 @@ FUZZY_PATTERNS = [
     (r"^quote\s+\d", "quote"),
     (r"^price\s+(setup|set|profile|view)", "price setup"),
     (r"^(pricing|my\s*prices)", "pricing"),
+    (r"^(portfolio|my\s*holdings|inventory|my\s*stock)", "portfolio"),
+    (r"^i\s+have\s+\d+.*(?:gold|silver|platinum|sona|chandi)", "inventory_update"),
+    (r"^(clear|remove|delete)\s+inventory", "clear_inventory"),
 ]
 
 # Tool definitions for Claude
@@ -245,6 +250,39 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "update_inventory",
+        "description": "Store or update the user's metal inventory/holdings. Use when user says things like 'I have 500g 22K gold', 'my stock is 2kg silver', 'I hold 100g gold'. JewelClaw tracks their portfolio value and sends weekly reports.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "metal": {
+                    "type": "string",
+                    "enum": ["gold", "silver", "platinum"],
+                    "description": "Type of metal.",
+                },
+                "weight_grams": {
+                    "type": "number",
+                    "description": "Weight in grams. Convert kg to grams (1kg = 1000g).",
+                },
+                "karat": {
+                    "type": "string",
+                    "enum": ["24k", "22k", "18k", "14k", "pure"],
+                    "description": "Karat for gold, or 'pure' for silver/platinum.",
+                },
+            },
+            "required": ["metal", "weight_grams"],
+        },
+    },
+    {
+        "name": "get_portfolio",
+        "description": "Get the user's current inventory portfolio value with daily P&L. Shows each holding's current value and change. Use when user asks about 'portfolio', 'holdings', 'inventory value', 'my stock'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
 ]
 
 
@@ -372,7 +410,10 @@ RULES:
 11. Always format numbers with Indian comma separators (₹7,00,000 not ₹700,000 for lakhs).
 12. If the user says something you don't understand or that's not jewelry-related, be helpful but brief.
 13. RemindGenie: If the user mentions someone's birthday, anniversary, or a date to remember, use add_reminder to save it. Confirm what was saved.
-14. If user asks about their reminders or upcoming dates, use list_reminders tool."""
+14. If user asks about their reminders or upcoming dates, use list_reminders tool.
+15. Inventory: If the user tells you about their gold/silver/platinum stock (e.g. "I have 500g 22K gold"), use update_inventory to save it. JewelClaw will track their portfolio value daily.
+16. If user asks about portfolio, holdings, inventory value, or "my stock", use get_portfolio tool and share the formatted summary.
+17. Price alerts run automatically every 15 minutes. If user sets a buy/sell threshold via set_price_alert, they'll get instant WhatsApp alerts when gold crosses their target - even at 2 AM."""
 
         return system
 
@@ -527,6 +568,10 @@ RULES:
                 return await self._tool_add_reminder(db, user, tool_input)
             elif tool_name == "list_reminders":
                 return await self._tool_list_reminders(db, user, tool_input)
+            elif tool_name == "update_inventory":
+                return await self._tool_update_inventory(db, user, tool_input)
+            elif tool_name == "get_portfolio":
+                return await self._tool_get_portfolio(db, user, tool_input)
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
         except Exception as e:
@@ -770,6 +815,41 @@ RULES:
             "personal_reminders": personal[:20],
             "festival_count": festival_count,
         }
+
+    async def _tool_update_inventory(
+        self, db: AsyncSession, user: User, inputs: Dict
+    ) -> Dict:
+        """Store/update inventory holding."""
+        metal = inputs["metal"]
+        weight = inputs["weight_grams"]
+        karat = inputs.get("karat", "24k" if metal == "gold" else "pure")
+
+        result = await background_agent.store_inventory(
+            db, user.id, metal, weight, karat
+        )
+
+        # Get updated portfolio value
+        portfolio = await background_agent.get_portfolio_summary(db, user.id)
+        if "error" not in portfolio:
+            result["total_portfolio_value"] = portfolio["total_value"]
+            result["message"] = (
+                f"Stored {weight}g {karat} {metal}. "
+                f"Total portfolio: ₹{portfolio['total_value']:,.0f}. "
+                f"You'll get weekly reports every Sunday."
+            )
+        else:
+            result["message"] = f"Stored {weight}g {karat} {metal}. Portfolio tracking enabled."
+
+        return result
+
+    async def _tool_get_portfolio(
+        self, db: AsyncSession, user: User, inputs: Dict
+    ) -> Dict:
+        """Get portfolio summary."""
+        portfolio = await background_agent.get_portfolio_summary(db, user.id)
+        if "error" not in portfolio:
+            portfolio["formatted"] = background_agent.format_portfolio_message(portfolio)
+        return portfolio
 
 
 # Singleton
