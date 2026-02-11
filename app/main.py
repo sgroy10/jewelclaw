@@ -1200,6 +1200,122 @@ async def get_subscribers(db: AsyncSession = Depends(get_db)):
     }
 
 
+@app.get("/admin/stats")
+async def admin_stats(db: AsyncSession = Depends(get_db)):
+    """Launch dashboard — real-time stats for tracking growth."""
+    from datetime import datetime, timedelta
+    import pytz
+
+    ist = pytz.timezone("Asia/Kolkata")
+    now = datetime.now(ist)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_ago = now - timedelta(days=7)
+
+    # Total users
+    total_result = await db.execute(select(func.count(User.id)))
+    total_users = total_result.scalar() or 0
+
+    # New users today
+    today_result = await db.execute(
+        select(func.count(User.id)).where(User.created_at >= today_start)
+    )
+    new_today = today_result.scalar() or 0
+
+    # New users this week
+    week_result = await db.execute(
+        select(func.count(User.id)).where(User.created_at >= week_ago)
+    )
+    new_this_week = week_result.scalar() or 0
+
+    # Active users (messaged in last 24h)
+    active_24h_result = await db.execute(
+        select(func.count(func.distinct(Conversation.user_id))).where(
+            Conversation.created_at >= now - timedelta(hours=24),
+            Conversation.role == "user"
+        )
+    )
+    active_24h = active_24h_result.scalar() or 0
+
+    # Active users (messaged in last 7 days)
+    active_7d_result = await db.execute(
+        select(func.count(func.distinct(Conversation.user_id))).where(
+            Conversation.created_at >= week_ago,
+            Conversation.role == "user"
+        )
+    )
+    active_7d = active_7d_result.scalar() or 0
+
+    # Total messages
+    msg_result = await db.execute(select(func.count(Conversation.id)))
+    total_messages = msg_result.scalar() or 0
+
+    # Messages today
+    msg_today_result = await db.execute(
+        select(func.count(Conversation.id)).where(Conversation.created_at >= today_start)
+    )
+    messages_today = msg_today_result.scalar() or 0
+
+    # Morning brief subscribers
+    sub_result = await db.execute(
+        select(func.count(User.id)).where(User.subscribed_to_morning_brief == True)
+    )
+    brief_subscribers = sub_result.scalar() or 0
+
+    # Onboarding completed
+    onboard_result = await db.execute(
+        select(func.count(User.id)).where(User.onboarding_completed == True)
+    )
+    onboarded = onboard_result.scalar() or 0
+
+    # Top intents (most used commands) from last 7 days
+    intent_result = await db.execute(
+        select(Conversation.intent, func.count(Conversation.id).label("cnt"))
+        .where(
+            Conversation.created_at >= week_ago,
+            Conversation.role == "user",
+            Conversation.intent.isnot(None)
+        )
+        .group_by(Conversation.intent)
+        .order_by(desc(func.count(Conversation.id)))
+        .limit(10)
+    )
+    top_intents = [{"intent": row[0], "count": row[1]} for row in intent_result.all()]
+
+    # Recent signups (last 10)
+    recent_result = await db.execute(
+        select(User).order_by(desc(User.created_at)).limit(10)
+    )
+    recent_users = recent_result.scalars().all()
+
+    return {
+        "as_of": now.strftime("%d %b %Y, %I:%M %p IST"),
+        "users": {
+            "total": total_users,
+            "new_today": new_today,
+            "new_this_week": new_this_week,
+            "onboarding_completed": onboarded,
+            "morning_brief_subscribers": brief_subscribers,
+        },
+        "activity": {
+            "active_last_24h": active_24h,
+            "active_last_7d": active_7d,
+            "total_messages": total_messages,
+            "messages_today": messages_today,
+        },
+        "top_commands_7d": top_intents,
+        "recent_signups": [
+            {
+                "name": u.name,
+                "phone": u.phone_number[-4:].rjust(len(u.phone_number), "*"),
+                "city": u.preferred_city,
+                "business_type": u.business_type,
+                "joined": str(u.created_at),
+            }
+            for u in recent_users
+        ],
+    }
+
+
 @app.post("/admin/reset-database")
 async def admin_reset_database():
     """DROP ALL TABLES and recreate them. This will delete all data!"""
