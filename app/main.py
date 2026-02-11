@@ -532,8 +532,9 @@ async def whatsapp_webhook(
         # Phase 1: Store incoming message with intelligence
         await store_conversation(db, user.id, "user", message_body)
 
-        # MIGRATION: Existing users with name but not onboarded → auto-complete
-        if not user.onboarding_completed and user.name and not is_new_user:
+        # MIGRATION: Existing users with name+business_type but not onboarded → auto-complete
+        # Requires both name AND business_type to avoid catching mid-onboarding users
+        if not user.onboarding_completed and user.name and user.business_type and not is_new_user:
             user.onboarding_completed = True
             if not user.subscribed_to_morning_brief:
                 user.subscribed_to_morning_brief = True
