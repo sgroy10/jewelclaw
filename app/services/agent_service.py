@@ -21,6 +21,7 @@ from app.config import settings
 from app.models import User, Conversation, BusinessMemory, MetalRate
 from app.services.business_memory_service import business_memory_service
 from app.services.reminder_service import reminder_service
+from app.services.pricing_engine_service import pricing_engine
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ EXACT_COMMANDS = {
     "1", "2", "3", "4", "5", "6", "fresh", "today", "news",
     "alerts", "pdf", "lookbook pdf", "create pdf",
     "remind", "remind list", "remind festivals",
+    "quote", "price setup", "price profile", "pricing",
 }
 
 # Fuzzy patterns that map to existing commands
@@ -53,6 +55,9 @@ FUZZY_PATTERNS = [
     (r"^(search|find)\s+.+", "search"),
     (r"^remind", "remind"),
     (r"^(birthday|anniversary|reminder)", "remind"),
+    (r"^quote\s+\d", "quote"),
+    (r"^price\s+(setup|set|profile|view)", "price setup"),
+    (r"^(pricing|my\s*prices)", "pricing"),
 ]
 
 # Tool definitions for Claude
@@ -112,7 +117,7 @@ TOOLS = [
     },
     {
         "name": "calculate_jewelry_quote",
-        "description": "Calculate a customer quote for a jewelry piece using current gold rate and the user's stored making charges. Includes GST (3%).",
+        "description": "Calculate a full customer quote/bill for a jewelry piece. Uses current gold rate, user's stored making charges, wastage, hallmark, and GST. Returns a complete bill breakdown.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -127,11 +132,19 @@ TOOLS = [
                 },
                 "jewelry_type": {
                     "type": "string",
-                    "description": "Type of jewelry: necklace, ring, bangle, earring, etc.",
+                    "description": "Type of jewelry: necklace, ring, bangle, earring, chain, pendant, bracelet, mangalsutra, anklet, coin.",
                 },
                 "making_charge_percent": {
                     "type": "number",
-                    "description": "Making charge percentage. If not provided, uses stored making charge for this jewelry type.",
+                    "description": "Making charge percentage. If not provided, uses user's stored rate for this jewelry type.",
+                },
+                "stone_cost": {
+                    "type": "number",
+                    "description": "Additional stone/diamond cost in INR. Default 0.",
+                },
+                "quantity": {
+                    "type": "integer",
+                    "description": "Number of pieces. Default 1.",
                 },
             },
             "required": ["weight_grams", "karat"],
@@ -601,72 +614,25 @@ RULES:
     async def _tool_calculate_quote(
         self, db: AsyncSession, user: User, inputs: Dict
     ) -> Dict:
-        """Calculate a jewelry quote."""
-        weight = inputs["weight_grams"]
-        karat = inputs["karat"].lower().replace("k", "k")
-        jewelry_type = inputs.get("jewelry_type", "general")
-        making_pct = inputs.get("making_charge_percent")
-
-        # Get current gold rate
-        city = user.preferred_city or "Mumbai"
-        result = await db.execute(
-            select(MetalRate)
-            .where(MetalRate.city == city)
-            .order_by(desc(MetalRate.recorded_at))
-            .limit(1)
+        """Calculate a jewelry quote using the pricing engine."""
+        quote = await pricing_engine.generate_quote(
+            db=db,
+            user_id=user.id,
+            weight_grams=inputs["weight_grams"],
+            karat=inputs["karat"],
+            jewelry_type=inputs.get("jewelry_type", "general"),
+            making_charge_pct=inputs.get("making_charge_percent"),
+            stone_cost=inputs.get("stone_cost", 0),
+            quantity=inputs.get("quantity", 1),
+            city=user.preferred_city,
         )
-        rate = result.scalar_one_or_none()
-        if not rate:
-            return {"error": "Could not fetch current gold rates"}
 
-        # Get rate for this karat
-        karat_rates = {
-            "24k": rate.gold_24k,
-            "22k": rate.gold_22k,
-            "18k": rate.gold_18k or 0,
-            "14k": rate.gold_14k or 0,
-        }
-        gold_rate = karat_rates.get(karat, rate.gold_22k)
+        if "error" in quote:
+            return quote
 
-        # Get making charge from memory if not provided
-        if making_pct is None:
-            memories = await business_memory_service.get_user_memory(
-                db, user.id, category="making_charges"
-            )
-            for m in memories:
-                if jewelry_type.lower() in m.key.lower() and m.value_numeric:
-                    making_pct = m.value_numeric
-                    break
-            # Fallback: check for a general making charge
-            if making_pct is None:
-                for m in memories:
-                    if m.value_numeric:
-                        making_pct = m.value_numeric
-                        break
-
-        if making_pct is None:
-            making_pct = 14.0  # Industry default
-
-        # Calculate
-        gold_cost = weight * gold_rate
-        making_cost = gold_cost * (making_pct / 100)
-        subtotal = gold_cost + making_cost
-        gst = subtotal * 0.03
-        total = subtotal + gst
-
-        return {
-            "weight_grams": weight,
-            "karat": karat,
-            "jewelry_type": jewelry_type,
-            "gold_rate_per_gram": gold_rate,
-            "gold_cost": round(gold_cost, 0),
-            "making_charge_percent": making_pct,
-            "making_cost": round(making_cost, 0),
-            "subtotal": round(subtotal, 0),
-            "gst_3_percent": round(gst, 0),
-            "total": round(total, 0),
-            "city": city,
-        }
+        # Return full breakdown for Claude to format naturally
+        quote["formatted_bill"] = pricing_engine.format_quote_message(quote)
+        return quote
 
     async def _tool_search_designs(
         self, db: AsyncSession, user: User, inputs: Dict

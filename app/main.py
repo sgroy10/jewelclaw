@@ -28,6 +28,7 @@ from app.services.price_tracker import price_tracker
 from app.services.alerts_service import alerts_service
 from app.services.lookbook_service import lookbook_service
 from app.services.reminder_service import reminder_service
+from app.services.pricing_engine_service import pricing_engine
 
 # Configure logging
 logging.basicConfig(
@@ -114,6 +115,11 @@ Your AI-powered jewelry industry assistant.
 • *pdf* - Generate lookbook PDF
 • *alerts* - View your price drop alerts
 • *subscribe* - Daily 9 AM morning brief
+
+💎 *Quick Quote:*
+• *quote* 10g 22k necklace - Instant bill
+• *price setup* - Set your making charges
+• *price profile* - View your rates
 
 🔔 *RemindGenie:*
 • *remind list* - View your reminders
@@ -424,6 +430,16 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
         match = re.search(r'create lookbook\s*(.*)', message_body.lower())
         name = match.group(1).strip() if match else None
         return await handle_create_lookbook_command(db, user, name)
+
+    # ==========================================================================
+    # PRICING ENGINE COMMANDS
+    # ==========================================================================
+
+    if command == "quote" or command.startswith("quote"):
+        return await handle_quote_command(db, user, message_body)
+
+    if command in ("price setup", "price profile", "pricing") or command.startswith("price set") or command.startswith("price "):
+        return await handle_price_command(db, user, message_body)
 
     # ==========================================================================
     # REMINDGENIE COMMANDS
@@ -773,6 +789,85 @@ _You'll be notified when:_
 
     await db.commit()
     return "_Reply 'trends' for more designs_"
+
+
+async def handle_quote_command(db: AsyncSession, user, message_body: str) -> str:
+    """Handle quote command - generate instant jewelry bill."""
+    text = message_body.strip().lower()
+
+    # Just "quote" with no args -> show usage
+    if text in ("quote", "quote help"):
+        return """💎 *Quick Quote - Instant Jewelry Bill*
+
+*Usage:*
+quote [weight] [karat] [type]
+
+*Examples:*
+quote 10g 22k necklace
+quote 5g 18k ring
+quote 15g bangle
+quote 8g 22k chain x3
+quote 20g 22k mangalsutra
+
+*Supported types:*
+necklace, ring, bangle, earring, chain, pendant, bracelet, mangalsutra, anklet, coin
+
+_Uses YOUR making charges. Type 'price setup' to configure._"""
+
+    parsed = pricing_engine.parse_quote_input(text)
+    if not parsed:
+        return "Could not parse quote. Try: quote 10g 22k necklace"
+
+    quote = await pricing_engine.generate_quote(
+        db=db,
+        user_id=user.id,
+        weight_grams=parsed["weight_grams"],
+        karat=parsed["karat"],
+        jewelry_type=parsed["jewelry_type"],
+        stone_cost=parsed.get("stone_cost", 0),
+        quantity=parsed.get("quantity", 1),
+        city=user.preferred_city,
+    )
+
+    return pricing_engine.format_quote_message(quote)
+
+
+async def handle_price_command(db: AsyncSession, user, message_body: str) -> str:
+    """Handle price setup/set/profile commands."""
+    text = message_body.strip().lower()
+
+    # price profile -> show current settings
+    if text in ("price profile", "price view", "my prices", "pricing"):
+        return await pricing_engine.get_setup_summary(db, user.id)
+
+    # price setup -> show menu
+    if text in ("price setup", "price help", "price"):
+        return pricing_engine.get_setup_menu()
+
+    # price set [type] [value] -> update a rate
+    if text.startswith("price set"):
+        parsed = pricing_engine.parse_setup_input(text)
+        if not parsed:
+            return """Could not parse. Try:
+price set necklace 15
+price set ring wastage 2.5
+price set hallmark 50"""
+
+        if parsed["type"] == "hallmark":
+            await pricing_engine.save_hallmark_charge(db, user.id, parsed["value"])
+            return f"✅ Hallmark charge set to *₹{parsed['value']:,.0f}* per piece."
+
+        elif parsed["type"] == "wastage":
+            jtype = pricing_engine._normalize_jewelry_type(parsed["jewelry_type"])
+            await pricing_engine.save_wastage(db, user.id, jtype, parsed["value"])
+            return f"✅ Wastage for *{jtype.title()}* set to *{parsed['value']}%*."
+
+        elif parsed["type"] == "making":
+            jtype = pricing_engine._normalize_jewelry_type(parsed["jewelry_type"])
+            await pricing_engine.save_making_charge(db, user.id, jtype, parsed["value"])
+            return f"✅ Making charge for *{jtype.title()}* set to *{parsed['value']}%*.\n\n_Try: quote 10g 22k {jtype}_"
+
+    return pricing_engine.get_setup_menu()
 
 
 async def handle_remind_command(db: AsyncSession, user, message_body: str) -> str:
