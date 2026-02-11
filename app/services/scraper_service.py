@@ -111,49 +111,25 @@ class ScraperService:
         self.timeout = 30.0
 
     async def scrape_all(self, db: AsyncSession) -> Dict[str, int]:
-        """Run all scrapers and return counts."""
+        """Run all scrapers and return counts. Only BlueStone (real data)."""
         results = {
             "bluestone": 0,
-            "caratlane": 0,
-            "tanishq": 0,
-            "pinterest": 0,
             "total": 0,
             "errors": []
         }
 
-        # Run scrapers with proper error isolation
         try:
             logger.info("Starting BlueStone scraper...")
             results["bluestone"] = await self.scrape_bluestone(db)
-            await db.commit()  # Commit successful scrape
+            await db.commit()
         except Exception as e:
             logger.error(f"BlueStone scraper failed: {e}")
             results["errors"].append(f"BlueStone: {str(e)}")
-            await db.rollback()  # Rollback failed transaction
-
-        await random_delay(2, 4)
-
-        try:
-            logger.info("Starting CaratLane scraper...")
-            results["caratlane"] = await self.scrape_caratlane(db)
-            await db.commit()  # Commit successful scrape
-        except Exception as e:
-            logger.error(f"CaratLane scraper failed: {e}")
-            results["errors"].append(f"CaratLane: {str(e)}")
-            await db.rollback()  # Rollback failed transaction
-
-        await random_delay(2, 4)
-
-        try:
-            logger.info("Starting Tanishq scraper...")
-            results["tanishq"] = await self.scrape_tanishq(db)
-            await db.commit()  # Commit successful scrape
-        except Exception as e:
-            logger.error(f"Tanishq scraper failed: {e}")
+            await db.rollback()
             results["errors"].append(f"Tanishq: {str(e)}")
             await db.rollback()  # Rollback failed transaction
 
-        results["total"] = results["bluestone"] + results["caratlane"] + results["tanishq"]
+        results["total"] = results["bluestone"]
         logger.info(f"Scraping complete: {results['total']} designs found")
 
         return results
@@ -386,104 +362,6 @@ class ScraperService:
 
         await db.flush()
         logger.info(f"BlueStone: {count} designs scraped")
-        return count
-
-    async def scrape_caratlane(self, db: AsyncSession, limit: int = 20) -> int:
-        """
-        CaratLane uses JavaScript SPA - direct scraping not possible.
-        This adds curated sample designs instead.
-        """
-        logger.info("CaratLane: JavaScript SPA - adding curated samples...")
-        count = 0
-
-        # Curated CaratLane-style designs (real product names from their catalog)
-        sample_designs = [
-            {"title": "Ethereal Sparkle Diamond Necklace", "category": "dailywear", "type": "necklace", "price": 45000},
-            {"title": "Divine Lakshmi Temple Necklace", "category": "temple", "type": "necklace", "price": 125000},
-            {"title": "Blooming Rose Gold Earrings", "category": "dailywear", "type": "earring", "price": 28000},
-            {"title": "Royal Kundan Bridal Set", "category": "bridal", "type": "necklace", "price": 285000},
-            {"title": "Minimalist Chain Gold Bracelet", "category": "dailywear", "type": "bracelet", "price": 18000},
-            {"title": "Traditional Antique Jhumkas", "category": "temple", "type": "earring", "price": 55000},
-            {"title": "Contemporary Geometric Ring", "category": "contemporary", "type": "ring", "price": 22000},
-            {"title": "Classic Solitaire Engagement Ring", "category": "bridal", "type": "ring", "price": 95000},
-            {"title": "Kids Tiny Butterfly Studs", "category": "kids", "type": "earring", "price": 8500},
-            {"title": "Men's Bold Kada Bracelet", "category": "mens", "type": "bracelet", "price": 75000},
-        ]
-
-        for item in sample_designs:
-            existing = await db.execute(
-                select(Design).where(Design.source == "caratlane").where(Design.title == item["title"])
-            )
-            if existing.scalar_one_or_none():
-                continue
-
-            design = Design(
-                source="caratlane",
-                source_url="https://www.caratlane.com",
-                image_url=None,
-                title=item["title"],
-                category=item["category"],
-                metal_type="gold",
-                price_range_min=item["price"],
-                price_range_max=item["price"],
-                style_tags=[item["type"]],
-                trending_score=52
-            )
-            db.add(design)
-            count += 1
-            logger.info(f"CaratLane: Added sample '{item['title'][:30]}...'")
-
-        await db.flush()
-        logger.info(f"CaratLane: {count} sample designs added")
-        return count
-
-    async def scrape_tanishq(self, db: AsyncSession, limit: int = 20) -> int:
-        """
-        Tanishq blocks automated requests (403).
-        This adds curated sample designs instead.
-        """
-        logger.info("Tanishq: Site blocks scrapers - adding curated samples...")
-        count = 0
-
-        # Curated Tanishq-style designs (real product names from their catalog)
-        sample_designs = [
-            {"title": "Rivaah Divine Mangalsutra", "category": "bridal", "type": "necklace", "price": 185000},
-            {"title": "Divyam Temple Gold Necklace", "category": "temple", "type": "necklace", "price": 245000},
-            {"title": "Mia Everyday Diamond Studs", "category": "dailywear", "type": "earring", "price": 32000},
-            {"title": "Zoya Signature Cocktail Ring", "category": "contemporary", "type": "ring", "price": 165000},
-            {"title": "Aveer Men's Gold Chain", "category": "mens", "type": "necklace", "price": 125000},
-            {"title": "Queen of Hearts Polki Set", "category": "bridal", "type": "necklace", "price": 520000},
-            {"title": "South Indian Kemp Jhumkas", "category": "temple", "type": "earring", "price": 78000},
-            {"title": "Lightweight Office Wear Bangles", "category": "dailywear", "type": "bangle", "price": 45000},
-            {"title": "Traditional Antique Choker", "category": "temple", "type": "necklace", "price": 195000},
-            {"title": "Delicate Rose Gold Pendant", "category": "dailywear", "type": "necklace", "price": 28000},
-        ]
-
-        for item in sample_designs:
-            existing = await db.execute(
-                select(Design).where(Design.source == "tanishq").where(Design.title == item["title"])
-            )
-            if existing.scalar_one_or_none():
-                continue
-
-            design = Design(
-                source="tanishq",
-                source_url="https://www.tanishq.co.in",
-                image_url=None,
-                title=item["title"],
-                category=item["category"],
-                metal_type="gold",
-                price_range_min=item["price"],
-                price_range_max=item["price"],
-                style_tags=[item["type"]],
-                trending_score=55  # Tanishq premium brand
-            )
-            db.add(design)
-            count += 1
-            logger.info(f"Tanishq: Added sample '{item['title'][:30]}...'")
-
-        await db.flush()
-        logger.info(f"Tanishq: {count} sample designs added")
         return count
 
     async def get_trending_designs(

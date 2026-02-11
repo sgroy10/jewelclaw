@@ -441,6 +441,23 @@ class IndustryNews(Base):
     )
 
 
+class BrandSitemapEntry(Base):
+    """Track brand sitemap product counts for competitive intelligence."""
+
+    __tablename__ = "brand_sitemap_entries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    brand = Column(String(50), nullable=False, index=True)
+    product_count = Column(Integer, default=0)
+    category_breakdown = Column(JSON, default={})  # {"bridal": 12, "rings": 45, ...}
+    sitemap_url = Column(String(500), nullable=True)
+    last_scanned_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_brand_sitemap_brand", "brand"),
+    )
+
+
 class ConversationSummary(Base):
     """Compressed conversation history for AI context window management."""
 

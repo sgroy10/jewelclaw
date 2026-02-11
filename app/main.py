@@ -14,7 +14,7 @@ from sqlalchemy import select, desc, func
 from app.config import settings
 from app.database import init_db, close_db, get_db, reset_db
 # Import models to ensure they're registered with Base.metadata
-from app.models import User, Conversation, MetalRate, Design, UserDesignPreference, Lookbook, PriceHistory, Alert, TrendReport, BusinessMemory, ConversationSummary, Reminder, FestivalCalendar, IndustryNews
+from app.models import User, Conversation, MetalRate, Design, UserDesignPreference, Lookbook, PriceHistory, Alert, TrendReport, BusinessMemory, ConversationSummary, Reminder, FestivalCalendar, IndustryNews, BrandSitemapEntry
 from app.services.whatsapp_service import whatsapp_service
 from app.services.agent_service import agent_service
 from app.services.gold_service import metal_service
@@ -788,74 +788,121 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
 
 
 async def handle_trends_command(db: AsyncSession, user, phone_number: str) -> str:
-    """Handle trends command - show menu for trend categories."""
-    # Check if we have any designs in the DB
-    result = await db.execute(
-        select(func.count(Design.id))
-    )
-    design_count = result.scalar() or 0
+    """Handle trends command — weekly intelligence report with real trend data."""
+    try:
+        from app.services.trends_service import trend_intelligence
 
-    if design_count == 0:
-        return """🔥 *Trend Scout*
+        # Try cached report first (generated Monday)
+        cached = await trend_intelligence.get_cached_report(db)
+        if cached:
+            return cached
 
-No designs in database yet. Our scraper runs daily at 6 AM to find new jewelry designs.
+        # No cached report — generate on the fly
+        report = await trend_intelligence.generate_trend_report(db)
+        await db.commit()
+        return report
 
-_Type 'gold' for live rates or 'help' for all commands._"""
+    except Exception as e:
+        logger.error(f"Trend report error: {e}")
+        # Fallback to simple menu if trends service fails
+        return """*Trend Scout — Market Intelligence*
 
-    return f"""🔥 *Trend Scout* - _{design_count} designs_
-
-*Browse:*
-- *fresh* - Today's latest picks
-- *bridal* - Wedding & engagement
-- *dailywear* - Lightweight everyday
+*Category Reports:*
+- *bridal* - Wedding jewelry intel
+- *dailywear* - Everyday jewelry trends
 - *temple* - Traditional South Indian
-- *mens* - Men's collection
-- *luxury* - Global luxury brands
+- *mens* - Men's collection data
 - *contemporary* - Modern minimalist
 
-*Curated:*
-- *news* - Industry launches & trends
+*Market Data:*
+- *fresh* - Today's market intel
+- *news* - Industry headlines
 
-Like a design? Reply *like [id]* to save
-See saved: *lookbook*"""
+_Reply any category for deep dive._"""
 
 
 async def handle_fresh_picks_command(db: AsyncSession, user, phone_number: str) -> str:
-    """Handle fresh picks - show today's fresh designs with images."""
+    """Handle fresh/today command — today's market intelligence summary."""
     from datetime import datetime, timedelta
 
-    # Get designs added in last 24 hours, or most recent if none
-    yesterday = datetime.utcnow() - timedelta(days=1)
+    parts = []
+    today_str = datetime.now().strftime("%d %b")
+    parts.append(f"*Today's Intel — {today_str}*")
 
-    result = await db.execute(
-        select(Design)
-        .where(Design.image_url.like('%cloudinary%'))  # Only Cloudinary images
-        .order_by(desc(Design.id))  # Newest first
-        .limit(10)
-    )
-    designs = result.scalars().all()
+    # --- Industry News ---
+    try:
+        from app.services.industry_news_service import industry_news_service
+        news = await industry_news_service.get_recent(db, limit=5)
+        if news:
+            parts.append("\n*Headlines:*")
+            for item in news[:3]:
+                summary = item.summary or item.headline[:60]
+                parts.append(f"  {summary}")
+    except Exception:
+        pass
 
-    if not designs:
-        return """🔥 *Today's Fresh Picks*
+    # --- Gold Price ---
+    try:
+        rate = await metal_service.get_current_rates(db, "Mumbai")
+        if rate:
+            analysis = await metal_service.get_market_analysis(db, "Mumbai")
+            change = analysis.daily_change
+            arrow = f"↑₹{abs(change):,.0f}" if change > 0 else f"↓₹{abs(change):,.0f}" if change < 0 else "→"
+            parts.append(f"\n*Price Watch:*")
+            parts.append(f"  Gold 24K: ₹{rate.gold_24k:,.0f} ({arrow})")
+            if rate.silver:
+                parts.append(f"  Silver: ₹{rate.silver:,.0f}/gm")
+    except Exception:
+        pass
 
-No fresh designs yet. Scraping new content...
+    # --- Amazon Bestseller highlight ---
+    try:
+        from app.services.editorial_scraper import editorial_scraper
+        benchmarks = await editorial_scraper.get_price_benchmarks("necklaces")
+        if benchmarks and benchmarks.get("count", 0) >= 3:
+            avg = benchmarks["avg_price"]
+            if avg >= 100000:
+                parts.append(f"  Amazon necklace avg: ₹{avg/100000:.1f}L")
+            else:
+                parts.append(f"  Amazon necklace avg: ₹{avg:,.0f}")
+    except Exception:
+        pass
 
-_Check back in a few minutes!_"""
+    # --- Brand Activity (if available) ---
+    try:
+        from app.services.brand_monitor_service import brand_monitor
+        brand_summary = await brand_monitor.get_brand_activity_summary(db)
+        if brand_summary:
+            parts.append(f"\n*Brand Watch:*\n{brand_summary}")
+    except Exception:
+        pass
 
-    # Send header
-    await whatsapp_service.send_message(phone_number, f"🔥 *Today's Fresh Picks*\n_{len(designs)} designs_")
+    # --- 2-3 BlueStone images as bonus ---
+    try:
+        result = await db.execute(
+            select(Design)
+            .where(Design.source == "bluestone")
+            .where(Design.image_url.isnot(None))
+            .order_by(desc(Design.scraped_at))
+            .limit(3)
+        )
+        designs = result.scalars().all()
+        if designs:
+            parts.append(f"\n*Latest BlueStone:*")
+            # Send text first
+            await whatsapp_service.send_message(phone_number, "\n".join(parts))
+            # Then send images
+            for d in designs:
+                price_str = f"₹{d.price_range_min:,.0f}" if d.price_range_min else ""
+                caption = f"*{d.title[:50]}*\n{price_str} | {d.source}"
+                if d.image_url:
+                    await whatsapp_service.send_message(phone_number, caption, media_url=d.image_url)
+            return "_Reply 'trends' for weekly report | 'news' for all headlines_"
+    except Exception:
+        pass
 
-    # Send each design with image
-    for i, d in enumerate(designs, 1):
-        price_text = f"₹{d.price_range_min:,.0f}" if d.price_range_min else "Price on request"
-        caption = f"*{i}. {d.title[:50]}*\n{d.category or 'General'} | {price_text}\n_Source: {d.source}_\n\nReply 'like {d.id}' to save"
-
-        if d.image_url:
-            await whatsapp_service.send_message(phone_number, caption, media_url=d.image_url)
-        else:
-            await whatsapp_service.send_message(phone_number, caption)
-
-    return "_Reply 'trends' for more categories | 'lookbook' to see saved_"
+    parts.append(f"\n_Reply 'trends' for weekly report | 'news' for all headlines_")
+    return "\n".join(parts)
 
 
 async def handle_price_drops_command(db: AsyncSession, user, phone_number: str) -> str:
@@ -925,43 +972,60 @@ async def handle_industry_news_command(db: AsyncSession, user, phone_number: str
 
 
 async def handle_category_command(db: AsyncSession, user, category: str, phone_number: str) -> str:
-    """Handle category commands - show designs by category with images."""
-    designs = await scraper_service.get_trending_designs(db, category=category, limit=5)
+    """Handle category commands — intelligence-first deep dive with optional images."""
+    try:
+        from app.services.trends_service import trend_intelligence
+        report = await trend_intelligence.get_category_deep_dive(db, category)
 
-    category_titles = {
-        "bridal": "💍 Bridal Collection",
-        "dailywear": "✨ Dailywear Designs",
-        "temple": "🛕 Temple Jewelry",
-        "mens": "👔 Men's Collection",
-        "contemporary": "🎨 Contemporary Styles",
-        "luxury": "💎 Global Luxury",
-    }
+        # Send text report first
+        await whatsapp_service.send_message(phone_number, report)
 
-    title = category_titles.get(category, f"📿 {category.title()} Designs")
+        # Then send 2-3 BlueStone images if available
+        try:
+            result = await db.execute(
+                select(Design)
+                .where(Design.source == "bluestone")
+                .where(Design.category == category)
+                .where(Design.image_url.isnot(None))
+                .order_by(desc(Design.scraped_at))
+                .limit(3)
+            )
+            designs = result.scalars().all()
 
-    if not designs:
-        return f"""*{title}*
+            # If no designs in exact category, try broader search
+            if not designs:
+                result = await db.execute(
+                    select(Design)
+                    .where(Design.image_url.isnot(None))
+                    .where(Design.category == category)
+                    .order_by(desc(Design.scraped_at))
+                    .limit(3)
+                )
+                designs = result.scalars().all()
 
-No {category} designs found yet.
+            for d in designs:
+                price_str = f"₹{d.price_range_min:,.0f}" if d.price_range_min else ""
+                caption = f"*{d.title[:50]}*\n{price_str} | {d.source}\n_Reply 'like {d.id}' to save_"
+                if d.image_url:
+                    await whatsapp_service.send_message(phone_number, caption, media_url=d.image_url)
+        except Exception:
+            pass
 
-_Try 'trends' to see all trending designs_"""
+        return "_Reply 'trends' for full market report_"
 
-    # Send header
-    await whatsapp_service.send_message(phone_number, f"*{title}*")
+    except Exception as e:
+        logger.error(f"Category deep dive error: {e}")
+        # Fallback to basic design display
+        designs = await scraper_service.get_trending_designs(db, category=category, limit=5)
+        if not designs:
+            return f"*{category.title()} Intelligence*\n\nNo data available yet for {category}.\n\n_Reply 'trends' for market overview._"
 
-    # Send each design with its image
-    for i, d in enumerate(designs, 1):
-        price_text = f"₹{d.price_range_min:,.0f}" if d.price_range_min else "Price N/A"
-        caption = f"*{i}. {d.title[:50]}*\n{price_text} | {d.source}\n\nReply 'like {d.id}' to save"
-
-        # Convert via Cloudinary (webp -> jpg for Twilio)
-        if d.image_url:
-            cloudinary_url = await image_service.upload_from_url(d.image_url, d.source)
-            await whatsapp_service.send_message(phone_number, caption, media_url=cloudinary_url)
-        else:
-            await whatsapp_service.send_message(phone_number, caption)
-
-    return "_Reply 'lookbook' to see your saved designs_"
+        parts = [f"*{category.title()} — Top Designs*"]
+        for i, d in enumerate(designs, 1):
+            price_str = f"₹{d.price_range_min:,.0f}" if d.price_range_min else "N/A"
+            parts.append(f"{i}. {d.title[:50]} — {price_str}")
+        parts.append("\n_Reply 'trends' for full report_")
+        return "\n".join(parts)
 
 
 async def handle_like_command(db: AsyncSession, user, command: str) -> str:
@@ -2580,6 +2644,34 @@ async def trigger_editorial_scrape():
     """Manually trigger editorial design scrape."""
     await scheduler_service.scrape_editorial_designs()
     return {"status": "triggered"}
+
+
+@app.post("/scheduler/trigger/brand-scan")
+async def trigger_brand_scan():
+    """Manually trigger brand sitemap scan."""
+    await scheduler_service.scan_brand_sitemaps()
+    return {"status": "triggered"}
+
+
+@app.post("/scheduler/trigger/trend-report")
+async def trigger_trend_report():
+    """Manually trigger weekly trend report generation."""
+    await scheduler_service.generate_weekly_trend_report()
+    return {"status": "triggered"}
+
+
+@app.post("/admin/purge-fake-designs")
+async def purge_fake_designs(db: AsyncSession = Depends(get_db)):
+    """Delete fake/hardcoded designs from DB (CaratLane, Tanishq samples)."""
+    from sqlalchemy import delete
+    count = 0
+    for source in ["caratlane", "tanishq"]:
+        result = await db.execute(
+            delete(Design).where(Design.source == source)
+        )
+        count += result.rowcount
+    await db.commit()
+    return {"purged": count, "sources": ["caratlane", "tanishq"]}
 
 
 @app.get("/admin/preview/morning-brief/{phone}")

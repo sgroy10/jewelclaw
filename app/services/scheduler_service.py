@@ -139,12 +139,30 @@ class SchedulerService:
             replace_existing=True
         )
 
-        # Evening Design Scrape: 6 PM IST (editorial sources for freshness)
+        # Evening Design Scrape: 6 PM IST (Amazon bestsellers for freshness)
         self.scheduler.add_job(
             self.scrape_editorial_designs,
             CronTrigger(hour=18, minute=0, timezone=IST),
             id="evening_design_scraper",
-            name="Evening Editorial Design Scrape",
+            name="Evening Amazon Bestseller Scrape",
+            replace_existing=True
+        )
+
+        # Brand Sitemap Monitor: Daily 7 AM IST
+        self.scheduler.add_job(
+            self.scan_brand_sitemaps,
+            CronTrigger(hour=7, minute=0, timezone=IST),
+            id="brand_sitemap_scan",
+            name="Brand Sitemap Competitive Scan",
+            replace_existing=True
+        )
+
+        # Weekly Trend Report: Monday 7 AM IST
+        self.scheduler.add_job(
+            self.generate_weekly_trend_report,
+            CronTrigger(day_of_week="mon", hour=7, minute=30, timezone=IST),
+            id="weekly_trend_report",
+            name="Weekly Trend Intelligence Report",
             replace_existing=True
         )
 
@@ -461,12 +479,13 @@ class SchedulerService:
                         logger.error(f"Error scraping {category}: {e}")
                         sources_results[category] = 0
 
-                # --- Phase 2: Editorial + Marketplace sources ---
+                # --- Phase 2: Amazon Bestsellers (price intelligence) ---
                 try:
                     from app.services.editorial_scraper import editorial_scraper
 
-                    editorial_categories = ["necklaces", "earrings", "bridal", "luxury", "contemporary", "temple", "mens"]
-                    for category in editorial_categories:
+                    # Only categories Amazon actually has (maps to AMAZON_CATEGORIES)
+                    amazon_categories = ["necklaces", "earrings", "rings", "bangles"]
+                    for category in amazon_categories:
                         try:
                             designs = await editorial_scraper.scrape_editorial_sources(category, limit=6)
                             saved_count = 0
@@ -740,7 +759,8 @@ class SchedulerService:
 
             async with get_db_session() as db:
                 total_saved = 0
-                categories = ["necklaces", "earrings", "bridal", "luxury", "contemporary"]
+                # Only Amazon-supported categories
+                categories = ["necklaces", "earrings", "rings", "bangles"]
 
                 for category in categories:
                     try:
@@ -794,6 +814,38 @@ class SchedulerService:
 
         except Exception as e:
             logger.error(f"Evening editorial scrape error: {e}")
+
+    async def scan_brand_sitemaps(self):
+        """Scan brand sitemaps for competitive intelligence (7 AM daily)."""
+        logger.info("=" * 50)
+        logger.info("BRAND SITEMAP SCAN — Competitive Intelligence")
+        logger.info("=" * 50)
+        try:
+            from app.services.brand_monitor_service import brand_monitor
+            async with get_db_session() as db:
+                results = await brand_monitor.scan_brand_sitemaps(db)
+                await db.commit()
+                for brand, data in results.items():
+                    new = data.get("new", 0)
+                    total = data.get("total", 0)
+                    logger.info(f"  {brand}: {total} products ({new} new)")
+                logger.info("BRAND SCAN COMPLETE")
+        except Exception as e:
+            logger.error(f"Brand sitemap scan error: {e}")
+
+    async def generate_weekly_trend_report(self):
+        """Generate weekly trend intelligence report (Monday 7:30 AM)."""
+        logger.info("=" * 50)
+        logger.info("WEEKLY TREND REPORT — Generating Intelligence")
+        logger.info("=" * 50)
+        try:
+            from app.services.trends_service import trend_intelligence
+            async with get_db_session() as db:
+                report = await trend_intelligence.generate_trend_report(db)
+                await db.commit()
+                logger.info(f"Trend report generated: {len(report)} chars")
+        except Exception as e:
+            logger.error(f"Weekly trend report error: {e}")
 
     def get_job_status(self) -> dict:
         """Get status of all scheduled jobs."""

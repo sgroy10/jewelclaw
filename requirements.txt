@@ -39,6 +39,9 @@ pydantic-settings==2.1.0
 # Language Detection
 langdetect==1.0.9
 
+# Trend Intelligence
+pytrends==4.9.2
+
 # Utilities
 python-multipart==0.0.9
 pytz==2024.1
