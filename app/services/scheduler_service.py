@@ -16,6 +16,7 @@ from app.services.scraper_service import scraper_service
 from app.services.api_scraper import api_scraper
 from app.services.image_service import image_service
 from app.services.business_memory_service import business_memory_service
+from app.services.reminder_service import reminder_service
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,32 @@ class SchedulerService:
             ),
             id="design_scraper",
             name="Scrape Jewelry Designs",
+            replace_existing=True
+        )
+
+        # RemindGenie: Midnight greeting at 12:01 AM IST
+        self.scheduler.add_job(
+            self.send_midnight_reminders,
+            CronTrigger(
+                hour=0,
+                minute=1,
+                timezone=IST
+            ),
+            id="remind_midnight",
+            name="RemindGenie Midnight Greetings",
+            replace_existing=True
+        )
+
+        # RemindGenie: Morning reminder at 8:00 AM IST
+        self.scheduler.add_job(
+            self.send_morning_reminders,
+            CronTrigger(
+                hour=8,
+                minute=0,
+                timezone=IST
+            ),
+            id="remind_morning",
+            name="RemindGenie Morning Reminders",
             replace_existing=True
         )
 
@@ -286,6 +313,137 @@ class SchedulerService:
 
         except Exception as e:
             logger.error(f"Error in design scraping job: {e}")
+
+    async def send_midnight_reminders(self):
+        """Send RemindGenie midnight greetings (12:01 AM IST)."""
+        logger.info("=" * 50)
+        logger.info("REMINDGENIE: 12:01 AM MIDNIGHT GREETINGS")
+        logger.info("=" * 50)
+
+        try:
+            async with get_db_session() as db:
+                # Get today's user reminders
+                user_reminders = await reminder_service.get_todays_reminders(db)
+                # Get today's festivals
+                festivals = await reminder_service.get_todays_festivals()
+
+                if not user_reminders and not festivals:
+                    logger.info("RemindGenie: No reminders or festivals today")
+                    return
+
+                # Group reminders by user
+                user_groups = {}
+                for user, reminder in user_reminders:
+                    if user.id not in user_groups:
+                        user_groups[user.id] = {"user": user, "reminders": []}
+                    user_groups[user.id]["reminders"].append({
+                        "name": reminder.name,
+                        "occasion": reminder.occasion,
+                        "relationship": reminder.relationship,
+                        "custom_note": reminder.custom_note,
+                    })
+
+                # If there are festivals but no personal reminders, send to all subscribed users
+                if festivals and not user_reminders:
+                    from sqlalchemy import select
+                    from app.models import User
+                    result = await db.execute(
+                        select(User).where(User.subscribed_to_morning_brief == True)
+                    )
+                    subscribed_users = result.scalars().all()
+                    for user in subscribed_users:
+                        if user.id not in user_groups:
+                            user_groups[user.id] = {"user": user, "reminders": []}
+
+                # Send to each user
+                sent_count = 0
+                for user_id, data in user_groups.items():
+                    user = data["user"]
+                    try:
+                        message = await reminder_service.build_reminder_message(
+                            user_name=user.name or "Friend",
+                            reminders=data["reminders"],
+                            festivals=festivals,
+                            is_midnight=True,
+                        )
+
+                        if message:
+                            phone = f"whatsapp:{user.phone_number}"
+                            sent = await whatsapp_service.send_message(phone, message)
+                            if sent:
+                                sent_count += 1
+                                logger.info(f"RemindGenie midnight sent to {user.name} ({user.phone_number})")
+                    except Exception as e:
+                        logger.error(f"RemindGenie error for {user.phone_number}: {e}")
+
+                logger.info(f"REMINDGENIE MIDNIGHT COMPLETE: {sent_count} messages sent")
+
+        except Exception as e:
+            logger.error(f"RemindGenie midnight job error: {e}")
+
+    async def send_morning_reminders(self):
+        """Send RemindGenie morning reminders (8:00 AM IST)."""
+        logger.info("=" * 50)
+        logger.info("REMINDGENIE: 8:00 AM MORNING REMINDERS")
+        logger.info("=" * 50)
+
+        try:
+            async with get_db_session() as db:
+                user_reminders = await reminder_service.get_todays_reminders(db)
+                festivals = await reminder_service.get_todays_festivals()
+
+                if not user_reminders and not festivals:
+                    logger.info("RemindGenie: No reminders or festivals today")
+                    return
+
+                # Group by user
+                user_groups = {}
+                for user, reminder in user_reminders:
+                    if user.id not in user_groups:
+                        user_groups[user.id] = {"user": user, "reminders": []}
+                    user_groups[user.id]["reminders"].append({
+                        "name": reminder.name,
+                        "occasion": reminder.occasion,
+                        "relationship": reminder.relationship,
+                        "custom_note": reminder.custom_note,
+                    })
+
+                # For festivals, include subscribed users
+                if festivals:
+                    from sqlalchemy import select
+                    from app.models import User
+                    result = await db.execute(
+                        select(User).where(User.subscribed_to_morning_brief == True)
+                    )
+                    subscribed_users = result.scalars().all()
+                    for user in subscribed_users:
+                        if user.id not in user_groups:
+                            user_groups[user.id] = {"user": user, "reminders": []}
+
+                sent_count = 0
+                for user_id, data in user_groups.items():
+                    user = data["user"]
+                    try:
+                        message = await reminder_service.build_reminder_message(
+                            user_name=user.name or "Friend",
+                            reminders=data["reminders"],
+                            festivals=festivals,
+                            is_midnight=False,
+                        )
+
+                        if message:
+                            phone = f"whatsapp:{user.phone_number}"
+                            sent = await whatsapp_service.send_message(phone, message)
+                            if sent:
+                                sent_count += 1
+                                logger.info(f"RemindGenie morning sent to {user.name} ({user.phone_number})")
+                    except Exception as e:
+                        logger.error(f"RemindGenie error for {user.phone_number}: {e}")
+
+                logger.info(f"REMINDGENIE MORNING COMPLETE: {sent_count} messages sent")
+
+        except Exception as e:
+            logger.error(f"RemindGenie morning job error: {e}")
 
     async def trigger_morning_brief_now(self):
         """Manually trigger morning brief."""

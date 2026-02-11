@@ -68,6 +68,7 @@ class User(Base):
     design_preferences = relationship("UserDesignPreference", back_populates="user", cascade="all, delete-orphan")
     lookbooks = relationship("Lookbook", back_populates="user", cascade="all, delete-orphan")
     business_memories = relationship("BusinessMemory", back_populates="user", cascade="all, delete-orphan")
+    reminders = relationship("Reminder", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User {self.phone_number}>"
@@ -346,6 +347,48 @@ class BusinessMemory(Base):
 
     def __repr__(self):
         return f"<BusinessMemory {self.user_id}: {self.key}={self.value}>"
+
+
+# =============================================================================
+# REMINDGENIE MODELS
+# =============================================================================
+
+class Reminder(Base):
+    """User reminders for birthdays, anniversaries, festivals, and custom dates."""
+
+    __tablename__ = "reminders"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Who/What
+    name = Column(String(100), nullable=False)  # "Mom", "Priya Sharma", "Diwali"
+    relationship = Column(String(50), nullable=True)  # "Mother", "Customer", "Festival"
+    occasion = Column(String(50), nullable=False)  # "birthday", "anniversary", "festival", "custom"
+
+    # When (month + day for annual recurring, full date for one-time)
+    remind_month = Column(Integer, nullable=False)  # 1-12
+    remind_day = Column(Integer, nullable=False)  # 1-31
+    remind_year = Column(Integer, nullable=True)  # NULL = every year, set = one-time
+
+    # Greeting
+    custom_note = Column(Text, nullable=True)  # User's optional note
+
+    # Status
+    is_active = Column(Boolean, default=True)
+    last_sent_at = Column(DateTime, nullable=True)  # Last time greeting was sent
+    created_at = Column(DateTime, server_default=func.now())
+
+    # Relationships
+    user = relationship("User", back_populates="reminders")
+
+    __table_args__ = (
+        Index("idx_reminder_user_active", "user_id", "is_active"),
+        Index("idx_reminder_month_day", "remind_month", "remind_day"),
+    )
+
+    def __repr__(self):
+        return f"<Reminder {self.name} - {self.occasion} ({self.remind_month}/{self.remind_day})>"
 
 
 class ConversationSummary(Base):

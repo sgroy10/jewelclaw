@@ -20,6 +20,7 @@ from sqlalchemy import select, desc
 from app.config import settings
 from app.models import User, Conversation, BusinessMemory, MetalRate
 from app.services.business_memory_service import business_memory_service
+from app.services.reminder_service import reminder_service
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ EXACT_COMMANDS = {
     "lookbook", "saved", "favorites",
     "1", "2", "3", "4", "5", "6", "fresh", "today", "news",
     "alerts", "pdf", "lookbook pdf", "create pdf",
+    "remind", "remind list", "remind festivals",
 }
 
 # Fuzzy patterns that map to existing commands
@@ -49,6 +51,8 @@ FUZZY_PATTERNS = [
     (r"^(like|save)\s+\d+", "like"),
     (r"^(skip)\s+\d+", "skip"),
     (r"^(search|find)\s+.+", "search"),
+    (r"^remind", "remind"),
+    (r"^(birthday|anniversary|reminder)", "remind"),
 ]
 
 # Tool definitions for Claude
@@ -188,6 +192,46 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "add_reminder",
+        "description": "Add a birthday, anniversary, festival, or custom reminder for the user. Use this when the user mentions someone's birthday, an anniversary, or any date they want to remember. JewelClaw will send them a greeting at 12:01 AM and a reminder at 8:00 AM on that date every year.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Name of the person or event (e.g. 'Mom', 'Priya Sharma', 'Wedding Anniversary').",
+                },
+                "occasion": {
+                    "type": "string",
+                    "enum": ["birthday", "anniversary", "festival", "custom"],
+                    "description": "Type of occasion.",
+                },
+                "month": {
+                    "type": "integer",
+                    "description": "Month number (1-12).",
+                },
+                "day": {
+                    "type": "integer",
+                    "description": "Day of month (1-31).",
+                },
+                "relationship": {
+                    "type": "string",
+                    "description": "Relationship to the user (e.g. 'Mother', 'Customer', 'Friend', 'Wife').",
+                },
+            },
+            "required": ["name", "occasion", "month", "day"],
+        },
+    },
+    {
+        "name": "list_reminders",
+        "description": "List all the user's saved reminders (birthdays, anniversaries, festivals). Use this when the user asks about their reminders or upcoming dates.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
 ]
 
 
@@ -313,7 +357,9 @@ RULES:
 9. Use Hindi/Hinglish terms naturally when relevant (sona, chandi, making charge, karigari).
 10. When user asks "should I buy", check their buy_threshold against current rate and give clear advice.
 11. Always format numbers with Indian comma separators (₹7,00,000 not ₹700,000 for lakhs).
-12. If the user says something you don't understand or that's not jewelry-related, be helpful but brief."""
+12. If the user says something you don't understand or that's not jewelry-related, be helpful but brief.
+13. RemindGenie: If the user mentions someone's birthday, anniversary, or a date to remember, use add_reminder to save it. Confirm what was saved.
+14. If user asks about their reminders or upcoming dates, use list_reminders tool."""
 
         return system
 
@@ -464,6 +510,10 @@ RULES:
                 return await self._tool_set_price_alert(db, user, tool_input)
             elif tool_name == "get_business_memory":
                 return await self._tool_get_business_memory(db, user, tool_input)
+            elif tool_name == "add_reminder":
+                return await self._tool_add_reminder(db, user, tool_input)
+            elif tool_name == "list_reminders":
+                return await self._tool_list_reminders(db, user, tool_input)
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
         except Exception as e:
@@ -715,6 +765,44 @@ RULES:
                 }
                 for m in memories
             ],
+        }
+
+    async def _tool_add_reminder(
+        self, db: AsyncSession, user: User, inputs: Dict
+    ) -> Dict:
+        """Add a reminder via AI conversation."""
+        r = await reminder_service.add_reminder(
+            db=db,
+            user_id=user.id,
+            name=inputs["name"],
+            occasion=inputs["occasion"],
+            month=inputs["month"],
+            day=inputs["day"],
+            relationship=inputs.get("relationship"),
+        )
+        month_name = reminder_service._month_name(inputs["month"])
+        return {
+            "saved": True,
+            "id": r.id,
+            "name": inputs["name"],
+            "occasion": inputs["occasion"],
+            "date": f"{inputs['day']} {month_name}",
+            "message": f"Reminder set for {inputs['name']} ({inputs['occasion']}) on {inputs['day']} {month_name}. You'll get a greeting at 12:01 AM and a reminder at 8:00 AM.",
+        }
+
+    async def _tool_list_reminders(
+        self, db: AsyncSession, user: User, inputs: Dict
+    ) -> Dict:
+        """List user reminders via AI conversation."""
+        reminders = await reminder_service.list_reminders(db, user.id)
+
+        personal = [r for r in reminders if r["occasion"] != "festival"]
+        festival_count = len([r for r in reminders if r["occasion"] == "festival"])
+
+        return {
+            "total": len(reminders),
+            "personal_reminders": personal[:20],
+            "festival_count": festival_count,
         }
 
 

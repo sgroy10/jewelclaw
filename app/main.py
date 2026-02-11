@@ -14,7 +14,7 @@ from sqlalchemy import select, desc, func
 from app.config import settings
 from app.database import init_db, close_db, get_db, reset_db
 # Import models to ensure they're registered with Base.metadata
-from app.models import User, Conversation, MetalRate, Design, UserDesignPreference, Lookbook, PriceHistory, Alert, TrendReport, BusinessMemory, ConversationSummary
+from app.models import User, Conversation, MetalRate, Design, UserDesignPreference, Lookbook, PriceHistory, Alert, TrendReport, BusinessMemory, ConversationSummary, Reminder
 from app.services.whatsapp_service import whatsapp_service
 from app.services.agent_service import agent_service
 from app.services.gold_service import metal_service
@@ -27,6 +27,7 @@ from app.services.api_scraper import api_scraper
 from app.services.price_tracker import price_tracker
 from app.services.alerts_service import alerts_service
 from app.services.lookbook_service import lookbook_service
+from app.services.reminder_service import reminder_service
 
 # Configure logging
 logging.basicConfig(
@@ -113,6 +114,13 @@ Your AI-powered jewelry industry assistant.
 • *pdf* - Generate lookbook PDF
 • *alerts* - View your price drop alerts
 • *subscribe* - Daily 9 AM morning brief
+
+🔔 *RemindGenie:*
+• *remind list* - View your reminders
+• *remind add* Mom | Mother | 15 March
+• *remind festivals* - Load Indian festivals
+• *remind delete [id]* - Remove a reminder
+
 • *setup* - How to join JewelClaw
 • *help* - Show this menu
 
@@ -416,6 +424,13 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
         match = re.search(r'create lookbook\s*(.*)', message_body.lower())
         name = match.group(1).strip() if match else None
         return await handle_create_lookbook_command(db, user, name)
+
+    # ==========================================================================
+    # REMINDGENIE COMMANDS
+    # ==========================================================================
+
+    if command == "remind" or command.startswith("remind"):
+        return await handle_remind_command(db, user, message_body)
 
     # Unknown command → Route through AI if enabled, else show welcome
     if settings.enable_ai_agent:
@@ -758,6 +773,102 @@ _You'll be notified when:_
 
     await db.commit()
     return "_Reply 'trends' for more designs_"
+
+
+async def handle_remind_command(db: AsyncSession, user, message_body: str) -> str:
+    """Handle all RemindGenie commands."""
+    import re
+    text = message_body.strip().lower()
+
+    # remind list
+    if text in ("remind", "remind list", "reminders", "my reminders"):
+        reminders = await reminder_service.list_reminders(db, user.id)
+        return reminder_service.format_reminder_list(reminders)
+
+    # remind festivals - load Indian festival calendar
+    if text in ("remind festivals", "remind festival", "load festivals"):
+        count = await reminder_service.load_festivals_for_user(db, user.id)
+        if count > 0:
+            return f"""🪔 *{count} Indian festivals loaded!*
+
+Diwali, Holi, Raksha Bandhan, Dussehra, and more!
+
+You'll get reminders on each festival day at *12:01 AM* and *8:00 AM* with greeting messages ready to share.
+
+_Type 'remind list' to see all your reminders_"""
+        else:
+            return "🪔 All festivals already loaded! Type 'remind list' to see them."
+
+    # remind delete [id]
+    match = re.match(r'remind\s+delete\s+(\d+)', text)
+    if match:
+        reminder_id = int(match.group(1))
+        deleted = await reminder_service.delete_reminder(db, user.id, reminder_id)
+        if deleted:
+            return f"✅ Reminder #{reminder_id} deleted."
+        return f"Reminder #{reminder_id} not found. Type 'remind list' to see your reminders."
+
+    # remind add [name] | [relationship] | [date] | [occasion]
+    if text.startswith("remind add"):
+        parsed = reminder_service.parse_reminder_input(message_body)
+        if not parsed:
+            return """📅 *How to add a reminder:*
+
+remind add [name] | [relationship] | [date]
+remind add [name] | [relationship] | [date] | [type]
+
+*Examples:*
+remind add Mom | Mother | 15 March
+remind add Priya | Customer | 20 June | anniversary
+remind add Wedding Day | Spouse | 14 Feb | anniversary
+remind add Rahul | Friend | 5/8
+
+*Types:* birthday, anniversary, festival, custom
+_(Default: birthday)_"""
+
+        reminder = await reminder_service.add_reminder(
+            db=db,
+            user_id=user.id,
+            name=parsed["name"],
+            occasion=parsed["occasion"],
+            month=parsed["month"],
+            day=parsed["day"],
+            relationship=parsed["relationship"],
+            year=parsed["year"],
+            custom_note=parsed.get("custom_note"),
+        )
+
+        emoji = "🎂" if parsed["occasion"] == "birthday" else "💍" if parsed["occasion"] == "anniversary" else "📅"
+        date_str = f"{parsed['day']} {reminder_service._month_name(parsed['month'])}"
+        if parsed.get("year"):
+            date_str += f" {parsed['year']}"
+
+        return f"""{emoji} *Reminder saved!*
+
+*{parsed['name']}* ({parsed.get('relationship', '')})
+{parsed['occasion'].title()} - {date_str}
+
+You'll get a greeting at *12:01 AM* and a reminder at *8:00 AM* with a ready-to-send message!
+
+_Type 'remind list' to see all reminders_"""
+
+    # remind help
+    return """🔔 *RemindGenie - Never Forget!*
+
+*Commands:*
+• *remind list* - See all your reminders
+• *remind add* [name] | [relation] | [date]
+• *remind festivals* - Load 30+ Indian festivals
+• *remind delete [id]* - Remove a reminder
+
+*Examples:*
+remind add Mom | Mother | 15 March
+remind add Priya | Customer | 20 June | anniversary
+remind add Papa | Father | 5 August
+
+JewelClaw remembers forever! You'll get greetings at 12:01 AM and 8:00 AM with ready-to-send messages.
+
+_Your customers will love you for never forgetting!_"""
 
 
 async def handle_create_lookbook_command(db: AsyncSession, user, name: str = None) -> str:
@@ -1158,6 +1269,49 @@ async def migrate_ai_agent():
             logger.info("AI Agent migration complete")
 
         return {"status": "success", "message": "AI Agent tables created (business_memories, conversation_summaries, user columns extended)"}
+
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
+
+
+@app.post("/admin/migrate-remindgenie")
+async def migrate_remindgenie():
+    """Create RemindGenie tables (reminders)."""
+    from sqlalchemy import text
+    from app.database import engine
+
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS reminders (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    name VARCHAR(100) NOT NULL,
+                    relationship VARCHAR(50),
+                    occasion VARCHAR(50) NOT NULL,
+                    remind_month INTEGER NOT NULL,
+                    remind_day INTEGER NOT NULL,
+                    remind_year INTEGER,
+                    custom_note TEXT,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    last_sent_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """))
+
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_reminder_user_active
+                ON reminders(user_id, is_active)
+            """))
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_reminder_month_day
+                ON reminders(remind_month, remind_day)
+            """))
+
+            logger.info("RemindGenie migration complete")
+
+        return {"status": "success", "message": "RemindGenie table created (reminders)"}
 
     except Exception as e:
         import traceback
