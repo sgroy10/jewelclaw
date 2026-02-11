@@ -292,6 +292,21 @@ class SchedulerService:
         if change_parts:
             parts.append(f"📈 {' | '.join(change_parts)}")
 
+        # --- PRICING NUDGE (for retailers/wholesalers without custom rates) ---
+        if user.business_type in ("retailer", "wholesaler") and (user.total_ai_interactions or 0) >= 2:
+            try:
+                from app.services.pricing_engine_service import pricing_engine
+                profile = await pricing_engine.get_user_pricing_profile(db, user.id)
+                has_custom = (
+                    profile["making_charges"]
+                    or profile["labor_per_gram"]
+                    or profile["cfp_rates"]
+                )
+                if not has_custom:
+                    parts.append(f"\n💎 _Set up your pricing chart and I'll generate instant quotes! Just tell me your making charges or upload a photo._")
+            except Exception:
+                pass
+
         # --- SIGN OFF ---
         parts.append(f"\n_Reply 'gold' for full rates_")
 

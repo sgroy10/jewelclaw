@@ -601,14 +601,27 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
     """Handle fast-path commands for onboarded users."""
     city = user.preferred_city or "Mumbai"
 
-    # GREETING → Smart response with live rate + nudge to help
+    # GREETING → Smart response with live rate + nudge
     if command == "greeting":
         name = user.name or "there"
         rate_text = await get_quick_rate_text(db, city)
-        return (
-            f"Hey {name}! {rate_text}\n\n"
-            f"What do you need? Just ask naturally, or type *help* to see everything I can do."
-        )
+        greeting = f"Hey {name}! {rate_text}\n\nWhat do you need? Just ask naturally, or type *help* to see everything I can do."
+
+        # Nudge retailers/wholesalers who haven't set up pricing
+        if user.business_type in ("retailer", "wholesaler"):
+            profile = await pricing_engine.get_user_pricing_profile(db, user.id)
+            has_custom = (
+                profile["making_charges"]
+                or profile["labor_per_gram"]
+                or profile["cfp_rates"]
+            )
+            if not has_custom:
+                greeting += (
+                    "\n\n💡 _Tip: Set up your pricing chart and I'll generate instant quotes for you!"
+                    " Just tell me your making charges or upload a photo of your rate card._"
+                )
+
+        return greeting
 
     # HELP → Interactive numbered feature menu
     if command == "help":
@@ -1207,7 +1220,29 @@ _Uses YOUR pricing profile. Type 'price setup' to configure._"""
         finishing=parsed.get("finishing"),
     )
 
-    return pricing_engine.format_quote_message(quote)
+    bill = pricing_engine.format_quote_message(quote)
+
+    # Smart nudge: if using all default rates, remind user to set up pricing
+    if "error" not in quote and not quote.get("is_custom_making"):
+        profile = await pricing_engine.get_user_pricing_profile(db, user.id)
+        has_any_custom = (
+            profile["making_charges"]
+            or profile["labor_per_gram"]
+            or profile["cfp_rates"]
+            or profile["cz_rates"]
+            or profile["diamond_rates"]
+        )
+        if not has_any_custom:
+            bill += (
+                "\n\n⚠️ *This quote uses industry default rates, not yours.*"
+                "\n\nTell me your rates and I'll remember forever:"
+                "\n_\"I charge 18% making on necklaces\"_"
+                "\n_\"My CZ pave rate is ₹10 per stone\"_"
+                "\n\nOr just *upload a photo* of your pricing chart!"
+                "\n\nType *7* for full pricing setup guide."
+            )
+
+    return bill
 
 
 async def handle_price_command(db: AsyncSession, user, message_body: str) -> str:
