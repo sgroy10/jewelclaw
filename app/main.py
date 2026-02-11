@@ -2653,6 +2653,106 @@ async def debug_send_test(phone: str):
         return {"error": str(e), "detail": traceback.format_exc()}
 
 
+@app.get("/admin/debug/remind-preview/{phone}")
+async def debug_remind_preview(phone: str, send: bool = False, db: AsyncSession = Depends(get_db)):
+    """
+    Preview (and optionally send) what a user receives when their reminders fire.
+    Simulates both midnight and morning messages using the user's ACTUAL reminders.
+    If no reminders match today, simulates with sample birthday + anniversary.
+    """
+    import traceback
+    from datetime import date as date_type
+
+    try:
+        # Find user
+        result = await db.execute(select(User).where(User.phone_number == phone))
+        user = result.scalar_one_or_none()
+        if not user:
+            return {"error": f"User not found: {phone}"}
+
+        user_name = user.name or "Friend"
+
+        # Check if user has any reminders matching today
+        import pytz
+        ist = pytz.timezone("Asia/Kolkata")
+        today = datetime.now(ist).date()
+
+        # Get today's actual reminders
+        today_reminders = await reminder_service.get_todays_reminders(db, today=today)
+        my_today = [
+            {"name": r.name, "occasion": r.occasion, "relationship": r.relation, "custom_note": r.custom_note}
+            for u, r in today_reminders if u.id == user.id
+        ]
+        festivals_today = await reminder_service.get_todays_festivals(today=today)
+
+        # If nothing today, simulate with sample data from user's actual reminders
+        sample_reminders = []
+        if not my_today:
+            all_reminders = await reminder_service.list_reminders(db, user.id)
+            # Pick first birthday and first anniversary
+            for r in all_reminders:
+                if r["occasion"] == "birthday" and not any(s["occasion"] == "birthday" for s in sample_reminders):
+                    sample_reminders.append({
+                        "name": r["name"], "occasion": "birthday",
+                        "relationship": r["relationship"], "custom_note": r.get("custom_note")
+                    })
+                elif r["occasion"] == "anniversary" and not any(s["occasion"] == "anniversary" for s in sample_reminders):
+                    sample_reminders.append({
+                        "name": r["name"], "occasion": "anniversary",
+                        "relationship": r["relationship"], "custom_note": r.get("custom_note")
+                    })
+                if len(sample_reminders) >= 2:
+                    break
+
+            # Fallback if no reminders at all
+            if not sample_reminders:
+                sample_reminders = [
+                    {"name": "Mom", "occasion": "birthday", "relationship": "Mother", "custom_note": None},
+                    {"name": "Priya", "occasion": "anniversary", "relationship": "Wife", "custom_note": None},
+                ]
+
+        reminders_to_use = my_today if my_today else sample_reminders
+        is_simulated = not bool(my_today)
+
+        # Build midnight message (12:01 AM)
+        midnight_msg = await reminder_service.build_reminder_message(
+            user_name=user_name,
+            reminders=reminders_to_use,
+            festivals=festivals_today,
+            is_midnight=True,
+        )
+
+        # Build morning message (8:00 AM)
+        morning_msg = await reminder_service.build_reminder_message(
+            user_name=user_name,
+            reminders=reminders_to_use,
+            festivals=festivals_today,
+            is_midnight=False,
+        )
+
+        result_data = {
+            "user": user_name,
+            "simulated": is_simulated,
+            "reminders_used": reminders_to_use,
+            "festivals_today": festivals_today,
+            "midnight_message": midnight_msg,
+            "morning_message": morning_msg,
+        }
+
+        # Optionally send to WhatsApp
+        if send and midnight_msg:
+            sent = await whatsapp_service.send_message(f"whatsapp:{phone}", midnight_msg)
+            result_data["sent_midnight"] = sent
+        if send and morning_msg:
+            sent = await whatsapp_service.send_message(f"whatsapp:{phone}", morning_msg)
+            result_data["sent_morning"] = sent
+
+        return result_data
+
+    except Exception as e:
+        return {"error": str(e), "trace": traceback.format_exc()}
+
+
 # =============================================================================
 # OPENCLAW ENDPOINTS - Price Tracking, Alerts, Intelligence
 # =============================================================================
