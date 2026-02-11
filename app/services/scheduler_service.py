@@ -113,23 +113,38 @@ class SchedulerService:
 
         try:
             async with get_db_session() as db:
-                # Fetch fresh scraped data
+                # Try fresh scrape first
                 scraped_data = await metal_service.fetch_all_rates("mumbai")
-                if not scraped_data:
-                    logger.error("Could not scrape rates for morning brief")
+
+                # Get database rate (fresh or cached)
+                rate = await metal_service.get_current_rates(db, "Mumbai", force_refresh=bool(scraped_data))
+                if not rate:
+                    logger.error("Could not get rates for morning brief (no scraped or cached data)")
                     return
 
-                # Get database rate record
-                rate = await metal_service.get_current_rates(db, "Mumbai", force_refresh=True)
-                if not rate:
-                    logger.error("Could not get rates for morning brief")
-                    return
+                logger.info(f"Morning brief using rate: 24K=₹{rate.gold_24k}, date={rate.rate_date}")
 
                 # Get market analysis
                 analysis = await metal_service.get_market_analysis(db, "Mumbai")
 
-                # Get CACHED expert analysis (saves API cost)
-                expert_analysis = await metal_service.get_cached_expert_analysis(scraped_data, analysis)
+                # Get expert analysis (use scraped data if available, else build from DB)
+                if scraped_data:
+                    expert_analysis = await metal_service.get_cached_expert_analysis(scraped_data, analysis)
+                else:
+                    logger.warning("Rate scrape failed, using cached DB rates for morning brief")
+                    from app.services.gold_service import MetalRateData
+                    cached_data = MetalRateData(
+                        city=rate.city, rate_date=rate.rate_date or "Today",
+                        gold_24k=rate.gold_24k, gold_22k=rate.gold_22k,
+                        gold_18k=rate.gold_18k, gold_14k=rate.gold_14k,
+                        silver=rate.silver or 0, platinum=rate.platinum or 0,
+                        gold_usd_oz=rate.gold_usd_oz, silver_usd_oz=rate.silver_usd_oz,
+                        usd_inr=rate.usd_inr,
+                        mcx_gold_futures=getattr(rate, 'mcx_gold_futures', None),
+                        mcx_silver_futures=getattr(rate, 'mcx_silver_futures', None),
+                    )
+                    expert_analysis = await metal_service.get_cached_expert_analysis(cached_data, analysis)
+                    scraped_data = cached_data
 
                 # Get subscribed users
                 users = await whatsapp_service.get_subscribed_users(db)
