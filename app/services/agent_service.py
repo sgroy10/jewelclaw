@@ -31,11 +31,8 @@ EXACT_COMMANDS = {
     "gold", "gold rate", "gold rates", "sona",
     "subscribe", "unsubscribe",
     "help", "menu", "setup", "onboarding", "start", "join",
-    "trends", "trending", "bridal", "wedding", "dailywear", "daily wear",
-    "lightweight", "temple", "traditional", "mens", "men", "gents",
-    "lookbook", "saved", "favorites",
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
-    "fresh", "today", "about", "about jewelclaw",
+    "about", "about jewelclaw",
     "remind", "remind list", "remind festivals",
     "quote", "price set", "price setup", "price profile", "pricing",
     "portfolio", "inventory", "holdings", "my holdings",
@@ -46,15 +43,9 @@ FUZZY_PATTERNS = [
     (r"^(what.?s|whats|show|get|check).*(gold|sona|rate)", "gold_rate"),
     (r"^gold.*(price|rate|today|now|current)", "gold_rate"),
     (r"^(kya|kitna|aaj).*(gold|sona|rate|bhav)", "gold_rate"),
-    (r"^(show|get|check).*(trend|design|new)", "trends"),
-    (r"^(bridal|shaadi|wedding).*(design|collection|jewel)", "bridal"),
-    (r"^(daily|office|light).*(wear|jewel|design)", "dailywear"),
     (r"^(subscribe|daily brief|morning brief)", "subscribe"),
     (r"^(stop|unsubscribe|no more)", "unsubscribe"),
     (r"^(help|commands|what can you do)", "help"),
-    (r"^(like|save)\s+\d+", "like"),
-    (r"^(skip)\s+\d+", "skip"),
-    (r"^(search|find)\s+.+", "search"),
     (r"^remind", "remind"),
     (r"^(birthday|anniversary|reminder)", "remind"),
     (r"^quote\s+\d", "quote"),
@@ -219,28 +210,6 @@ TOOLS = [
                 },
             },
             "required": ["pricing_data"],
-        },
-    },
-    {
-        "name": "search_designs",
-        "description": "Search trending jewelry designs in our database by category, style, or keyword.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "category": {
-                    "type": "string",
-                    "description": "Category to search: bridal, dailywear, temple, mens, contemporary.",
-                },
-                "keyword": {
-                    "type": "string",
-                    "description": "Keyword to search in design titles and descriptions.",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Max results to return (default 5).",
-                },
-            },
-            "required": [],
         },
     },
     {
@@ -634,8 +603,6 @@ PRICING KNOWLEDGE - You understand jewelry pricing deeply:
                 return await self._tool_calculate_quote(db, user, tool_input)
             elif tool_name == "save_pricing_config":
                 return await self._tool_save_pricing_config(db, user, tool_input)
-            elif tool_name == "search_designs":
-                return await self._tool_search_designs(db, user, tool_input)
             elif tool_name == "set_price_alert":
                 return await self._tool_set_price_alert(db, user, tool_input)
             elif tool_name == "get_business_memory":
@@ -773,43 +740,6 @@ PRICING KNOWLEDGE - You understand jewelry pricing deeply:
             "items_saved": len(saved),
             "details": saved,
             "message": f"Saved {len(saved)} pricing settings. These will be used in all future quotes.",
-        }
-
-    async def _tool_search_designs(
-        self, db: AsyncSession, user: User, inputs: Dict
-    ) -> Dict:
-        """Search designs in the database."""
-        from app.models import Design
-
-        query = select(Design)
-
-        category = inputs.get("category")
-        keyword = inputs.get("keyword")
-        limit = min(inputs.get("limit", 5), 10)
-
-        if category:
-            query = query.where(Design.category == category.lower())
-        if keyword:
-            query = query.where(Design.title.ilike(f"%{keyword}%"))
-
-        query = query.order_by(desc(Design.trending_score)).limit(limit)
-
-        result = await db.execute(query)
-        designs = result.scalars().all()
-
-        return {
-            "count": len(designs),
-            "designs": [
-                {
-                    "id": d.id,
-                    "title": d.title or "Untitled",
-                    "category": d.category,
-                    "price": d.price_range_min,
-                    "source": d.source,
-                    "has_image": bool(d.image_url),
-                }
-                for d in designs
-            ],
         }
 
     async def _tool_set_price_alert(

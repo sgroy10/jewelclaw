@@ -66,8 +66,6 @@ class User(Base):
 
     # Relationships
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
-    design_preferences = relationship("UserDesignPreference", back_populates="user", cascade="all, delete-orphan")
-    lookbooks = relationship("Lookbook", back_populates="user", cascade="all, delete-orphan")
     business_memories = relationship("BusinessMemory", back_populates="user", cascade="all, delete-orphan")
     reminders = relationship("Reminder", back_populates="user", cascade="all, delete-orphan")
 
@@ -152,162 +150,6 @@ class MetalRate(Base):
 
 # Keep old name for backward compatibility
 GoldRate = MetalRate
-
-
-# =============================================================================
-# TREND SCOUT MODELS
-# =============================================================================
-
-class Design(Base):
-    """Jewelry designs scraped from competitors and trend sources."""
-
-    __tablename__ = "designs"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-
-    # Source info
-    source = Column(String(50), nullable=False, index=True)  # bluestone, caratlane, tanishq, pinterest, amazon, etsy, vogue
-    source_url = Column(String(500), nullable=True)
-    image_url = Column(String(500), nullable=True)
-    source_type = Column(String(30), default="product")  # product, editorial, marketplace, inspiration
-
-    # Design details
-    title = Column(String(200), nullable=True)
-    description = Column(Text, nullable=True)
-    category = Column(String(50), nullable=True, index=True)  # bridal, dailywear, mens, kids, temple, contemporary
-    metal_type = Column(String(30), nullable=True)  # gold, silver, platinum, diamond
-    karat = Column(String(10), nullable=True)  # 22K, 18K, etc.
-
-    # Pricing
-    price_range_min = Column(Float, nullable=True)
-    price_range_max = Column(Float, nullable=True)
-
-    # Tags and scoring
-    style_tags = Column(JSON, default=[])  # ["minimal", "traditional", "kundan", "polki"]
-    trending_score = Column(Float, default=0)  # 0-100, calculated from likes/views
-
-    # Timestamps
-    scraped_at = Column(DateTime, server_default=func.now())
-    created_at = Column(DateTime, server_default=func.now())
-
-    # Relationships
-    user_preferences = relationship("UserDesignPreference", back_populates="design", cascade="all, delete-orphan")
-
-    __table_args__ = (
-        Index("idx_design_category_score", "category", "trending_score"),
-        Index("idx_design_source_scraped", "source", "scraped_at"),
-    )
-
-    def __repr__(self):
-        return f"<Design {self.id} - {self.title[:30] if self.title else 'Untitled'}>"
-
-
-class UserDesignPreference(Base):
-    """Track user interactions with designs (like/skip/save)."""
-
-    __tablename__ = "user_design_preferences"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    design_id = Column(Integer, ForeignKey("designs.id", ondelete="CASCADE"), nullable=False, index=True)
-
-    action = Column(String(20), nullable=False)  # liked, skipped, saved
-    created_at = Column(DateTime, server_default=func.now())
-
-    # Relationships
-    user = relationship("User", back_populates="design_preferences")
-    design = relationship("Design", back_populates="user_preferences")
-
-    __table_args__ = (
-        Index("idx_user_design_action", "user_id", "design_id", "action"),
-    )
-
-
-class Lookbook(Base):
-    """User-curated collections of designs for PDF export."""
-
-    __tablename__ = "lookbooks"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-
-    name = Column(String(100), nullable=False)
-    design_ids = Column(JSON, default=[])  # [1, 5, 12, 34, ...]
-    pdf_url = Column(String(500), nullable=True)
-
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-
-    # Relationships
-    user = relationship("User", back_populates="lookbooks")
-
-
-# =============================================================================
-# PRICE TRACKING & ALERTS
-# =============================================================================
-
-class PriceHistory(Base):
-    """Track price changes for designs over time."""
-
-    __tablename__ = "price_history"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    design_id = Column(Integer, ForeignKey("designs.id", ondelete="CASCADE"), nullable=False, index=True)
-
-    price = Column(Float, nullable=False)
-    recorded_at = Column(DateTime, server_default=func.now(), index=True)
-
-    __table_args__ = (
-        Index("idx_price_history_design_time", "design_id", "recorded_at"),
-    )
-
-
-class Alert(Base):
-    """User alerts for price drops, new arrivals, etc."""
-
-    __tablename__ = "alerts"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-
-    alert_type = Column(String(50), nullable=False)  # price_drop, new_arrival, trending, competitor_update
-    title = Column(String(200), nullable=False)
-    message = Column(Text, nullable=True)
-    design_id = Column(Integer, ForeignKey("designs.id", ondelete="SET NULL"), nullable=True)
-
-    # Alert extra data
-    extra_data = Column(JSON, default={})  # {"old_price": 50000, "new_price": 45000, "drop_percent": 10}
-
-    # Status
-    is_sent = Column(Boolean, default=False)
-    sent_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
-
-    __table_args__ = (
-        Index("idx_alert_user_sent", "user_id", "is_sent"),
-    )
-
-
-class TrendReport(Base):
-    """Daily/weekly trend analysis reports."""
-
-    __tablename__ = "trend_reports"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-
-    report_type = Column(String(50), nullable=False)  # daily, weekly
-    report_date = Column(DateTime, nullable=False, index=True)
-
-    # Trend data
-    top_categories = Column(JSON, default=[])  # [{"category": "bridal", "count": 45, "change": "+15%"}]
-    top_designs = Column(JSON, default=[])  # [{"design_id": 123, "score": 95}]
-    price_trends = Column(JSON, default={})  # {"avg_necklace_price": 75000, "change": "-2%"}
-    new_arrivals_count = Column(Integer, default=0)
-
-    # Source breakdown
-    source_stats = Column(JSON, default={})  # {"bluestone": 25, "caratlane": 18, "tanishq": 12}
-
-    created_at = Column(DateTime, server_default=func.now())
 
 
 # =============================================================================
@@ -438,23 +280,6 @@ class IndustryNews(Base):
 
     __table_args__ = (
         Index("idx_industry_news_priority", "priority", "scraped_at"),
-    )
-
-
-class BrandSitemapEntry(Base):
-    """Track brand sitemap product counts for competitive intelligence."""
-
-    __tablename__ = "brand_sitemap_entries"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    brand = Column(String(50), nullable=False, index=True)
-    product_count = Column(Integer, default=0)
-    category_breakdown = Column(JSON, default={})  # {"bridal": 12, "rings": 45, ...}
-    sitemap_url = Column(String(500), nullable=True)
-    last_scanned_at = Column(DateTime, server_default=func.now())
-
-    __table_args__ = (
-        Index("idx_brand_sitemap_brand", "brand"),
     )
 
 

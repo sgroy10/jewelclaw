@@ -12,9 +12,6 @@ from app.config import settings
 from app.database import get_db_session
 from app.services.gold_service import metal_service
 from app.services.whatsapp_service import whatsapp_service
-from app.services.scraper_service import scraper_service
-from app.services.api_scraper import api_scraper
-from app.services.image_service import image_service
 from app.services.business_memory_service import business_memory_service
 from app.services.reminder_service import reminder_service
 from app.services.background_agent_service import background_agent
@@ -66,19 +63,6 @@ class SchedulerService:
             ),
             id="rate_scraper",
             name="Scrape Metal Rates",
-            replace_existing=True
-        )
-
-        # Trend Scout: Design scraping at 6 AM IST daily
-        self.scheduler.add_job(
-            self.scrape_designs,
-            CronTrigger(
-                hour=6,
-                minute=0,
-                timezone=IST
-            ),
-            id="design_scraper",
-            name="Scrape Jewelry Designs",
             replace_existing=True
         )
 
@@ -136,33 +120,6 @@ class SchedulerService:
             CronTrigger(hour="6,10,14,18,22", minute=15, timezone=IST),
             id="industry_news",
             name="Jewelry Industry News Scrape",
-            replace_existing=True
-        )
-
-        # Evening Design Scrape: 6 PM IST (Amazon bestsellers for freshness)
-        self.scheduler.add_job(
-            self.scrape_editorial_designs,
-            CronTrigger(hour=18, minute=0, timezone=IST),
-            id="evening_design_scraper",
-            name="Evening Amazon Bestseller Scrape",
-            replace_existing=True
-        )
-
-        # Brand Sitemap Monitor: Daily 7 AM IST
-        self.scheduler.add_job(
-            self.scan_brand_sitemaps,
-            CronTrigger(hour=7, minute=0, timezone=IST),
-            id="brand_sitemap_scan",
-            name="Brand Sitemap Competitive Scan",
-            replace_existing=True
-        )
-
-        # Weekly Trend Report: Monday 7 AM IST
-        self.scheduler.add_job(
-            self.generate_weekly_trend_report,
-            CronTrigger(day_of_week="mon", hour=7, minute=30, timezone=IST),
-            id="weekly_trend_report",
-            name="Weekly Trend Intelligence Report",
             replace_existing=True
         )
 
@@ -411,137 +368,6 @@ class SchedulerService:
         except Exception as e:
             logger.error(f"Error in rate scraping job: {e}")
 
-    async def scrape_designs(self):
-        """Scrape jewelry designs from all sources (6 AM daily)."""
-        from sqlalchemy import select
-        from app.models import Design
-
-        logger.info("=" * 50)
-        logger.info("STARTING 6 AM FRESH SCRAPE - TREND SCOUT")
-        logger.info("=" * 50)
-
-        try:
-            async with get_db_session() as db:
-                total_saved = 0
-                sources_results = {}
-
-                # Scrape multiple categories for variety
-                categories = ["necklaces", "earrings", "bangles", "rings"]
-
-                for category in categories:
-                    try:
-                        logger.info(f"Scraping {category}...")
-
-                        # Use API scraper with Pinterest
-                        designs = await api_scraper.scrape_all_with_pinterest(
-                            category=category,
-                            limit_per_site=8
-                        )
-
-                        saved_count = 0
-                        for design in designs:
-                            # Check if already exists
-                            existing = await db.execute(
-                                select(Design).where(Design.source_url == design.source_url)
-                            )
-                            if existing.scalar_one_or_none():
-                                continue
-
-                            # Upload image to Cloudinary for WhatsApp compatibility
-                            cloudinary_url = design.image_url
-                            if image_service.configured and design.image_url:
-                                try:
-                                    cloudinary_url = await image_service.upload_from_url(
-                                        design.image_url, design.source
-                                    )
-                                except Exception as e:
-                                    logger.warning(f"Cloudinary upload failed: {e}")
-
-                            # Save to database with high score for fresh content
-                            db_design = Design(
-                                source=design.source,
-                                source_url=design.source_url,
-                                image_url=cloudinary_url,
-                                title=design.title,
-                                category=design.category or category,
-                                metal_type=design.metal_type,
-                                price_range_min=design.price,
-                                trending_score=85  # High score for fresh daily scrape
-                            )
-                            db.add(db_design)
-                            saved_count += 1
-
-                        sources_results[category] = saved_count
-                        total_saved += saved_count
-                        logger.info(f"  {category}: {saved_count} new designs saved")
-
-                    except Exception as e:
-                        logger.error(f"Error scraping {category}: {e}")
-                        sources_results[category] = 0
-
-                # --- Phase 2: Amazon Bestsellers (price intelligence) ---
-                try:
-                    from app.services.editorial_scraper import editorial_scraper
-
-                    # Only categories Amazon actually has (maps to AMAZON_CATEGORIES)
-                    amazon_categories = ["necklaces", "earrings", "rings", "bangles"]
-                    for category in amazon_categories:
-                        try:
-                            designs = await editorial_scraper.scrape_editorial_sources(category, limit=6)
-                            saved_count = 0
-                            for design in designs:
-                                existing = await db.execute(
-                                    select(Design).where(
-                                        (Design.source_url == design.source_url) & (Design.source_url != "")
-                                    ) if design.source_url else select(Design).where(
-                                        (Design.title == design.title) & (Design.source == design.source)
-                                    )
-                                )
-                                if existing.scalar_one_or_none():
-                                    continue
-
-                                cloudinary_url = design.image_url
-                                if image_service.configured and design.image_url:
-                                    try:
-                                        cloudinary_url = await image_service.upload_from_url(
-                                            design.image_url, design.source
-                                        )
-                                    except Exception:
-                                        pass
-
-                                db_design = Design(
-                                    source=design.source,
-                                    source_url=design.source_url or "",
-                                    image_url=cloudinary_url,
-                                    title=design.title,
-                                    category=design.category or category,
-                                    metal_type=design.metal_type,
-                                    price_range_min=design.price,
-                                    source_type=design.source_type,
-                                    trending_score=85,
-                                )
-                                db.add(db_design)
-                                saved_count += 1
-
-                            sources_results[f"editorial_{category}"] = saved_count
-                            total_saved += saved_count
-                            logger.info(f"  editorial {category}: {saved_count} new designs")
-                        except Exception as e:
-                            logger.error(f"Editorial scrape {category}: {e}")
-                except Exception as e:
-                    logger.error(f"Editorial scraper import/run error: {e}")
-
-                await db.commit()
-
-                logger.info("=" * 50)
-                logger.info(f"6 AM SCRAPE COMPLETE: {total_saved} total new designs")
-                for cat, count in sources_results.items():
-                    logger.info(f"  {cat}: {count}")
-                logger.info("=" * 50)
-
-        except Exception as e:
-            logger.error(f"Error in design scraping job: {e}")
-
     async def check_reminders_all_timezones(self):
         """
         Runs every hour (at :01). Checks which users are at midnight (00:xx)
@@ -744,108 +570,6 @@ class SchedulerService:
                 logger.info("INDUSTRY NEWS: Scrape complete")
         except Exception as e:
             logger.error(f"Industry news scrape error: {e}")
-
-    async def scrape_editorial_designs(self):
-        """Evening editorial design scrape (6 PM IST)."""
-        from app.models import Design
-        from sqlalchemy import select
-
-        logger.info("=" * 50)
-        logger.info("EVENING EDITORIAL SCRAPE - Trend Scout")
-        logger.info("=" * 50)
-
-        try:
-            from app.services.editorial_scraper import editorial_scraper
-
-            async with get_db_session() as db:
-                total_saved = 0
-                # Only Amazon-supported categories
-                categories = ["necklaces", "earrings", "rings", "bangles"]
-
-                for category in categories:
-                    try:
-                        designs = await editorial_scraper.scrape_editorial_sources(category, limit=6)
-
-                        saved_count = 0
-                        for design in designs:
-                            # Check if already exists
-                            existing = await db.execute(
-                                select(Design).where(
-                                    (Design.source_url == design.source_url) & (Design.source_url != "")
-                                ) if design.source_url else select(Design).where(
-                                    (Design.title == design.title) & (Design.source == design.source)
-                                )
-                            )
-                            if existing.scalar_one_or_none():
-                                continue
-
-                            # Upload to Cloudinary if available
-                            cloudinary_url = design.image_url
-                            if image_service.configured and design.image_url:
-                                try:
-                                    cloudinary_url = await image_service.upload_from_url(
-                                        design.image_url, design.source
-                                    )
-                                except Exception:
-                                    pass
-
-                            db_design = Design(
-                                source=design.source,
-                                source_url=design.source_url or "",
-                                image_url=cloudinary_url,
-                                title=design.title,
-                                category=design.category or category,
-                                metal_type=design.metal_type,
-                                price_range_min=design.price,
-                                source_type=design.source_type,
-                                trending_score=80,
-                            )
-                            db.add(db_design)
-                            saved_count += 1
-
-                        total_saved += saved_count
-                        logger.info(f"  {category}: {saved_count} new designs")
-
-                    except Exception as e:
-                        logger.error(f"Editorial scrape {category}: {e}")
-
-                await db.commit()
-                logger.info(f"EVENING SCRAPE COMPLETE: {total_saved} new designs")
-
-        except Exception as e:
-            logger.error(f"Evening editorial scrape error: {e}")
-
-    async def scan_brand_sitemaps(self):
-        """Scan brand sitemaps for competitive intelligence (7 AM daily)."""
-        logger.info("=" * 50)
-        logger.info("BRAND SITEMAP SCAN — Competitive Intelligence")
-        logger.info("=" * 50)
-        try:
-            from app.services.brand_monitor_service import brand_monitor
-            async with get_db_session() as db:
-                results = await brand_monitor.scan_brand_sitemaps(db)
-                await db.commit()
-                for brand, data in results.items():
-                    new = data.get("new", 0)
-                    total = data.get("total", 0)
-                    logger.info(f"  {brand}: {total} products ({new} new)")
-                logger.info("BRAND SCAN COMPLETE")
-        except Exception as e:
-            logger.error(f"Brand sitemap scan error: {e}")
-
-    async def generate_weekly_trend_report(self):
-        """Generate weekly trend intelligence report (Monday 7:30 AM)."""
-        logger.info("=" * 50)
-        logger.info("WEEKLY TREND REPORT — Generating Intelligence")
-        logger.info("=" * 50)
-        try:
-            from app.services.trends_service import trend_intelligence
-            async with get_db_session() as db:
-                report = await trend_intelligence.generate_trend_report(db)
-                await db.commit()
-                logger.info(f"Trend report generated: {len(report)} chars")
-        except Exception as e:
-            logger.error(f"Weekly trend report error: {e}")
 
     def get_job_status(self) -> dict:
         """Get status of all scheduled jobs."""
