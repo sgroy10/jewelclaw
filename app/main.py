@@ -2230,7 +2230,7 @@ async def get_conversations(phone: str, limit: int = 10, db: AsyncSession = Depe
         "conversations": [
             {
                 "role": c.role,
-                "content": c.content,
+                "content": c.content[:100] + "..." if c.content and len(c.content) > 100 else c.content,
                 "intent": c.intent,
                 "entities": c.entities,
                 "sentiment": c.sentiment,
@@ -2540,6 +2540,63 @@ async def trigger_morning_brief():
     """Manually trigger morning brief."""
     await scheduler_service.trigger_morning_brief_now()
     return {"status": "triggered"}
+
+
+@app.post("/scheduler/trigger/market-intelligence")
+async def trigger_market_intelligence():
+    """Manually trigger overnight market intelligence gathering."""
+    await scheduler_service.gather_overnight_intelligence()
+    intel = scheduler_service._cached_market_intel
+    return {
+        "status": "gathered",
+        "cached_intel_length": len(intel) if intel else 0,
+        "cached_intel": intel or "(empty)",
+    }
+
+
+@app.get("/admin/preview/morning-brief/{phone}")
+async def preview_morning_brief(phone: str, db: AsyncSession = Depends(get_db)):
+    """Preview morning brief for a specific user WITHOUT sending."""
+    import traceback
+    try:
+        # Find user
+        result = await db.execute(select(User).where(User.phone_number == phone))
+        user = result.scalar_one_or_none()
+        if not user:
+            return {"error": f"User not found: {phone}"}
+
+        # Get rates
+        scraped_data = await metal_service.fetch_all_rates("mumbai")
+        rate = await metal_service.get_current_rates(db, "Mumbai", force_refresh=bool(scraped_data))
+        if not rate:
+            return {"error": "No rates available"}
+
+        analysis = await metal_service.get_market_analysis(db, "Mumbai")
+        gold_24k = rate.gold_24k
+        change_24k = analysis.daily_change
+        if change_24k == 0 and scraped_data:
+            yesterday = getattr(scraped_data, 'yesterday_24k', None)
+            if yesterday and yesterday > 0:
+                change_24k = gold_24k - yesterday
+
+        silver = rate.silver or 0
+        market_intel = scheduler_service._cached_market_intel or ""
+
+        # Build the brief
+        brief = await scheduler_service._build_flowing_brief(
+            db, user, gold_24k, change_24k, silver, rate, analysis, market_intel
+        )
+
+        return {
+            "user": {"name": user.name, "phone": user.phone_number, "business_type": user.business_type},
+            "gold_24k": gold_24k,
+            "change_24k": change_24k,
+            "market_intel_available": bool(market_intel),
+            "brief_length": len(brief),
+            "brief": brief,
+        }
+    except Exception as e:
+        return {"error": str(e), "trace": traceback.format_exc()}
 
 
 @app.get("/admin/debug/morning-brief")
