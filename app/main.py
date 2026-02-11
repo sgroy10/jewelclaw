@@ -2230,7 +2230,7 @@ async def get_conversations(phone: str, limit: int = 10, db: AsyncSession = Depe
         "conversations": [
             {
                 "role": c.role,
-                "content": c.content[:100] + "..." if len(c.content) > 100 else c.content,
+                "content": c.content,
                 "intent": c.intent,
                 "entities": c.entities,
                 "sentiment": c.sentiment,
