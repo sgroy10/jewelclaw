@@ -122,20 +122,14 @@ COMMANDS = {
     "my stock": "portfolio",
     "clear inventory": "clear_inventory",
 
-    # Live search (Playwright)
-    "search": "search",
-    "find": "search",
+    # Search removed - requires ScraperAPI key, silently fails without it
 
-    # Trend menu options (1-6)
+    # Trend menu options (1-3)
     "1": "1",
     "2": "2",
     "3": "3",
-    "4": "4",
-    "5": "5",
-    "6": "6",
     "fresh": "1",
     "today": "1",
-    "news": "6",
 }
 
 

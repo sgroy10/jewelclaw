@@ -105,36 +105,38 @@ _pending_subscribe = {}  # phone_number -> True
 
 
 WELCOME_MESSAGE = """👋 *Welcome to JewelClaw!*
-Your AI-powered jewelry industry assistant.
+Your AI-powered jewelry business assistant.
 
-*Commands:*
-• *gold* - Live gold rates + expert analysis
-• *trends* - Trending jewelry designs
-• *search [query]* - Live search
+💰 *Gold & Rates:*
+• *gold* - Live gold, silver, platinum rates
 • *subscribe* - Daily 9 AM morning brief
 
 💎 *Quick Quote:*
-• *quote* 10g 22k necklace - Instant bill
+• *quote 10g 22k necklace* - Instant bill
 • *price setup* - Set your making charges
+• *price profile* - View your rates
 
 📦 *Portfolio Tracker:*
-• *portfolio* - Your holdings value + P&L
-• Tell me: "I have 500g 22K gold, 2kg silver"
-• Weekly reports every Sunday
+• *portfolio* - Holdings value + daily P&L
+• Tell me: "I have 500g 22K gold"
+• Weekly report every Sunday 10 AM
 
 🚨 *Price Alerts:*
 • "Alert me when gold drops below 7000"
-• Instant WhatsApp - even at 2 AM!
+• Instant WhatsApp when price crosses!
 
 🔔 *RemindGenie:*
-• *remind list* - View your reminders
 • *remind add* Mom | Mother | 15 March
-• *remind festivals* - Load Indian festivals
+• *remind list* - View your reminders
 
-• *setup* - How to join JewelClaw
+💬 *AI Chat:*
+Just talk to me naturally!
+"Should I buy gold today?"
+"Quote me 20g 22k bangles x2"
+"My mom's birthday is 15 March"
+
 • *help* - Show this menu
-
-🇮🇳 *Built for Indian Jewelers*
+• *setup* - Invite others to JewelClaw
 
 Type *gold* to get started!"""
 
@@ -373,14 +375,7 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
     if command == "3":
         return await handle_category_command(db, user, "dailywear", phone_number)
 
-    if command == "4":
-        return await handle_price_drops_command(db, user, phone_number)
-
-    if command == "5":
-        return await handle_new_arrivals_command(db, user, phone_number)
-
-    if command == "6" or command == "news":
-        return await handle_industry_news_command(db, user, phone_number)
+    # 4, 5, 6 removed - were pointing to broken/fake features
 
     # 7. BRIDAL → Show bridal designs
     if command == "bridal":
@@ -410,30 +405,7 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
     if command == "lookbook":
         return await handle_lookbook_command(db, user)
 
-    # 14. SEARCH → Live search via Playwright
-    if command == "search":
-        # Extract search query from the message
-        import re
-        match = re.search(r'(?:search|find)\s+(.+)', message_body.lower())
-        if match:
-            query = match.group(1).strip()
-            return await handle_search_command(db, user, query, phone_number)
-        return "Usage: search [query]\nExample: search bridal necklace"
-
-    # 15. PDF → Generate lookbook PDF
-    if command in ["pdf", "lookbook pdf", "create pdf"]:
-        return await handle_pdf_command(db, user, phone_number)
-
-    # 16. ALERTS → Show user alerts
-    if command == "alerts":
-        return await handle_alerts_command(db, user, phone_number)
-
-    # 17. CREATE LOOKBOOK → Create a new lookbook
-    if command == "create lookbook" or command.startswith("create lookbook"):
-        import re
-        match = re.search(r'create lookbook\s*(.*)', message_body.lower())
-        name = match.group(1).strip() if match else None
-        return await handle_create_lookbook_command(db, user, name)
+    # Search, PDF, Alerts, Create Lookbook removed - dependencies not available in production
 
     # ==========================================================================
     # PRICING ENGINE COMMANDS
@@ -477,20 +449,29 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
 
 async def handle_trends_command(db: AsyncSession, user, phone_number: str) -> str:
     """Handle trends command - show menu for trend categories."""
-    return """🔥 *JewelClaw Trend Intelligence*
+    # Check if we have any designs in the DB
+    result = await db.execute(
+        select(func.count(Design.id))
+    )
+    design_count = result.scalar() or 0
 
-Choose what you want to see:
+    if design_count == 0:
+        return """🔥 *Trend Scout*
 
-1️⃣ *Today's Fresh Picks* - 10 new designs
-2️⃣ *Bridal Collection* - Wedding jewelry
+No designs in database yet. Our scraper runs daily at 6 AM to find new jewelry designs.
+
+_Type 'gold' for live rates or 'help' for all commands._"""
+
+    return f"""🔥 *JewelClaw Trend Scout*
+_{design_count} designs in collection_
+
+1️⃣ *Fresh Picks* - Latest designs
+2️⃣ *Bridal* - Wedding jewelry
 3️⃣ *Daily Wear* - Lightweight designs
-4️⃣ *Price Drops* - Discounted items
-5️⃣ *New Arrivals* - Just launched
-6️⃣ *Industry News* - Market updates
 
-_Reply with number (1-6) to see_
+Or type: *bridal*, *dailywear*, *temple*, *mens*
 
-Or type: *bridal*, *dailywear*, *temple*"""
+_Reply with number (1-3) to browse_"""
 
 
 async def handle_fresh_picks_command(db: AsyncSession, user, phone_number: str) -> str:

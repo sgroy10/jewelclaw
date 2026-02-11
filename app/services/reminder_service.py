@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 # The scheduler will match on month+day
 # =============================================================================
 
+# 2026 Indian Festival Calendar - verified dates
+# Fixed-date festivals are always correct. Lunar festivals updated for 2026.
 INDIAN_FESTIVALS = [
     # January
     (1, 1, "New Year", "festival", "New Year wishes"),
@@ -38,39 +40,33 @@ INDIAN_FESTIVALS = [
     # February
     (2, 14, "Valentine's Day", "festival", "Love and warmth"),
     # March
+    (3, 4, "Holi", "festival", "Rang barse! Happy Holi"),
     (3, 8, "International Women's Day", "special", "Celebrating women"),
-    (3, 14, "Holi", "festival", "Rang barse! Happy Holi"),
+    (3, 26, "Ram Navami", "festival", "Jai Shri Ram"),
     # April
-    (4, 1, "Bank Holiday / April Fools", "festival", ""),
-    (4, 10, "Ram Navami", "festival", "Jai Shri Ram"),
     (4, 13, "Baisakhi", "festival", "Happy Baisakhi"),
     (4, 14, "Ambedkar Jayanti", "national", "Jai Bhim"),
     # May
     (5, 1, "May Day", "national", "Workers Day"),
-    (5, 11, "Mother's Day", "special", "Maa ke liye special"),
+    (5, 10, "Mother's Day", "special", "Maa ke liye special"),
     # June
-    (6, 15, "Father's Day", "special", "Papa ke liye"),
-    # July
-    (7, 17, "Muharram", "festival", "Peace and reflection"),
+    (6, 21, "Father's Day", "special", "Papa ke liye"),
     # August
-    (8, 9, "Raksha Bandhan", "festival", "Bhai-behen ka pyaar"),
-    (8, 15, "Independence Day", "national", "Vande Mataram"),
-    (8, 26, "Janmashtami", "festival", "Nand Ghar Anand Bhayo"),
+    (8, 15, "Independence Day / Janmashtami", "national", "Vande Mataram / Nand Ghar Anand Bhayo"),
+    (8, 28, "Raksha Bandhan", "festival", "Bhai-behen ka pyaar"),
     # September
     (9, 5, "Teacher's Day", "special", "Guru Brahma Guru Vishnu"),
-    (9, 7, "Ganesh Chaturthi", "festival", "Ganpati Bappa Morya"),
+    (9, 14, "Ganesh Chaturthi", "festival", "Ganpati Bappa Morya"),
     # October
     (10, 2, "Gandhi Jayanti", "national", "Bapu ko naman"),
-    (10, 3, "Navratri Begins", "festival", "Navratri ki hardik shubhkamnayein"),
-    (10, 12, "Dussehra", "festival", "Burai par acchai ki jeet"),
-    (10, 20, "Karwa Chauth", "festival", "Suhagan ko shubhkamnayein"),
-    (10, 29, "Dhanteras", "festival", "Dhan teras ki shubhkamnayein - time to buy gold!"),
-    (10, 31, "Diwali", "festival", "Shubh Deepawali"),
+    (10, 11, "Navratri Begins", "festival", "Navratri ki hardik shubhkamnayein"),
+    (10, 20, "Dussehra", "festival", "Burai par acchai ki jeet"),
+    (10, 29, "Karwa Chauth", "festival", "Suhagan ko shubhkamnayein"),
     # November
-    (11, 1, "Govardhan Puja", "festival", "Annakut ki shubhkamnayein"),
-    (11, 2, "Bhai Dooj", "festival", "Bhai-behen ka rishta"),
-    (11, 15, "Guru Nanak Jayanti", "festival", "Waheguru"),
-    (11, 19, "Chhath Puja", "festival", "Chhath Maiya ki jai"),
+    (11, 6, "Dhanteras", "festival", "Dhan teras ki shubhkamnayein - time to buy gold!"),
+    (11, 8, "Diwali", "festival", "Shubh Deepawali"),
+    (11, 9, "Govardhan Puja", "festival", "Annakut ki shubhkamnayein"),
+    (11, 10, "Bhai Dooj", "festival", "Bhai-behen ka rishta"),
     # December
     (12, 25, "Christmas", "festival", "Merry Christmas"),
     (12, 31, "New Year's Eve", "festival", "Naye saal ki shubhkamnayein"),
