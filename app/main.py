@@ -1383,7 +1383,7 @@ async def migrate_remindgenie():
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
                     name VARCHAR(100) NOT NULL,
-                    relationship VARCHAR(50),
+                    relation VARCHAR(50),
                     occasion VARCHAR(50) NOT NULL,
                     remind_month INTEGER NOT NULL,
                     remind_day INTEGER NOT NULL,

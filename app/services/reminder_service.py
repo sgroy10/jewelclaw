@@ -126,7 +126,7 @@ class ReminderService:
         reminder = Reminder(
             user_id=user_id,
             name=name,
-            relationship=relationship,
+            relation=relationship,
             occasion=occasion,
             remind_month=month,
             remind_day=day,
@@ -155,7 +155,7 @@ class ReminderService:
             items.append({
                 "id": r.id,
                 "name": r.name,
-                "relationship": r.relationship or "",
+                "relationship": r.relation or "",
                 "occasion": r.occasion,
                 "date": f"{r.remind_day} {self._month_name(r.remind_month)}",
                 "month": r.remind_month,
@@ -250,7 +250,7 @@ class ReminderService:
                 reminder = Reminder(
                     user_id=user_id,
                     name=f_name,
-                    relationship="Festival" if f_type == "festival" else "National Day" if f_type == "national" else "Special Day",
+                    relation="Festival" if f_type == "festival" else "National Day" if f_type == "national" else "Special Day",
                     occasion="festival",
                     remind_month=f_month,
                     remind_day=f_day,

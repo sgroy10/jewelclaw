@@ -363,7 +363,7 @@ class Reminder(Base):
 
     # Who/What
     name = Column(String(100), nullable=False)  # "Mom", "Priya Sharma", "Diwali"
-    relationship = Column(String(50), nullable=True)  # "Mother", "Customer", "Festival"
+    relation = Column(String(50), nullable=True)  # "Mother", "Customer", "Festival"
     occasion = Column(String(50), nullable=False)  # "birthday", "anniversary", "festival", "custom"
 
     # When (month + day for annual recurring, full date for one-time)

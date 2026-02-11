@@ -339,7 +339,7 @@ class SchedulerService:
                     user_groups[user.id]["reminders"].append({
                         "name": reminder.name,
                         "occasion": reminder.occasion,
-                        "relationship": reminder.relationship,
+                        "relationship": reminder.relation,
                         "custom_note": reminder.custom_note,
                     })
 
@@ -404,7 +404,7 @@ class SchedulerService:
                     user_groups[user.id]["reminders"].append({
                         "name": reminder.name,
                         "occasion": reminder.occasion,
-                        "relationship": reminder.relationship,
+                        "relationship": reminder.relation,
                         "custom_note": reminder.custom_note,
                     })
 
