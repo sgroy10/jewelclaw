@@ -493,11 +493,9 @@ async def store_conversation(db: AsyncSession, user_id: int, role: str, message:
 
 
 @app.post("/webhook/whatsapp")
-async def whatsapp_webhook(
-    request: Request,
-    db: AsyncSession = Depends(get_db)
-):
+async def whatsapp_webhook(request: Request):
     """Handle incoming WhatsApp messages from Twilio."""
+    phone_number = None
     try:
         form_data = await request.form()
         form_dict = dict(form_data)
@@ -532,6 +530,18 @@ async def whatsapp_webhook(
             message_body = ""  # Will be handled by image upload logic
 
         logger.info(f"Message from {phone_number}: {message_body[:50]}...")
+
+        # Get DB session — if DB is down, we catch it and send graceful error
+        try:
+            db_gen = get_db()
+            db = await db_gen.__anext__()
+        except Exception as db_err:
+            logger.error(f"DB CONNECTION FAILED: {db_err}")
+            await whatsapp_service.send_message(
+                phone_number,
+                "We're experiencing a brief server issue. Please try again in a few minutes. Your message was received."
+            )
+            return PlainTextResponse("")
 
         # Get or create user
         user, is_new_user = await whatsapp_service.get_or_create_user(db, phone_number, profile_name)
@@ -603,12 +613,25 @@ async def whatsapp_webhook(
             await store_conversation(db, user.id, "assistant", response)
 
         await db.commit()
+        try:
+            await db_gen.aclose()
+        except Exception:
+            pass
         return PlainTextResponse("")
 
     except Exception as e:
         import traceback
         logger.error(f"WEBHOOK ERROR: {e}")
         logger.error(traceback.format_exc())
+        # Send graceful error message if we have the phone number
+        if phone_number:
+            try:
+                await whatsapp_service.send_message(
+                    phone_number,
+                    "Something went wrong on our end. Please try again in a moment."
+                )
+            except Exception:
+                pass
         return PlainTextResponse("")
 
 
