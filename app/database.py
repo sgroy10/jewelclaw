@@ -82,7 +82,10 @@ def _create_engine():
         engine = create_async_engine(
             database_url,
             echo=settings.debug,
-            poolclass=NullPool,
+            pool_size=5,
+            max_overflow=10,
+            pool_timeout=30,
+            pool_recycle=300,  # Recycle connections every 5 min (Railway proxy resets)
             pool_pre_ping=True,
         )
         logger.info("Using PostgreSQL database (production mode)")
