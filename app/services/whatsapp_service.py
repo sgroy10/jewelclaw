@@ -97,23 +97,6 @@ COMMANDS = {
     "start": "setup",
     "join": "setup",
 
-    # Trend Scout commands
-    "trends": "trends",
-    "trending": "trending",
-    "bridal": "bridal",
-    "wedding": "bridal",
-    "dailywear": "dailywear",
-    "daily wear": "dailywear",
-    "lightweight": "dailywear",
-    "temple": "temple",
-    "traditional": "temple",
-    "mens": "mens",
-    "men": "mens",
-    "gents": "mens",
-    "lookbook": "lookbook",
-    "saved": "lookbook",
-    "favorites": "lookbook",
-
     # Portfolio / Inventory
     "portfolio": "portfolio",
     "holdings": "portfolio",
@@ -145,20 +128,8 @@ COMMANDS = {
     "pricing": "pricing",
     "my prices": "pricing",
 
-    # Trend shortcuts (words only)
-    "fresh": "fresh",
-    "today": "fresh",
-
-    # Global / Luxury
-    "luxury": "luxury",
-    "global": "luxury",
-    "cartier": "luxury",
-    "tiffany": "luxury",
-
-    # Contemporary / Modern
-    "contemporary": "contemporary",
-    "modern": "contemporary",
-    "minimal": "contemporary",
+    # Admin
+    "stats": "stats",
 
     # Industry News
     "news": "news",

@@ -609,6 +609,88 @@ async def whatsapp_webhook(request: Request):
         return PlainTextResponse("")
 
 
+async def generate_stats_message(db: AsyncSession) -> str:
+    """Generate WhatsApp-formatted stats for admin."""
+    from datetime import datetime, timedelta
+    import pytz
+
+    ist = pytz.timezone("Asia/Kolkata")
+    now = datetime.now(ist)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_ago = now - timedelta(days=7)
+
+    total = (await db.execute(select(func.count(User.id)))).scalar() or 0
+    new_today = (await db.execute(select(func.count(User.id)).where(User.created_at >= today_start))).scalar() or 0
+    new_week = (await db.execute(select(func.count(User.id)).where(User.created_at >= week_ago))).scalar() or 0
+    onboarded = (await db.execute(select(func.count(User.id)).where(User.onboarding_completed == True))).scalar() or 0
+    subscribers = (await db.execute(select(func.count(User.id)).where(User.subscribed_to_morning_brief == True))).scalar() or 0
+
+    active_24h = (await db.execute(
+        select(func.count(func.distinct(Conversation.user_id))).where(
+            Conversation.created_at >= now - timedelta(hours=24),
+            Conversation.role == "user"
+        )
+    )).scalar() or 0
+
+    active_7d = (await db.execute(
+        select(func.count(func.distinct(Conversation.user_id))).where(
+            Conversation.created_at >= week_ago,
+            Conversation.role == "user"
+        )
+    )).scalar() or 0
+
+    total_msgs = (await db.execute(select(func.count(Conversation.id)))).scalar() or 0
+    msgs_today = (await db.execute(select(func.count(Conversation.id)).where(Conversation.created_at >= today_start))).scalar() or 0
+
+    # Top commands this week
+    intent_result = await db.execute(
+        select(Conversation.intent, func.count(Conversation.id).label("cnt"))
+        .where(
+            Conversation.created_at >= week_ago,
+            Conversation.role == "user",
+            Conversation.intent.isnot(None)
+        )
+        .group_by(Conversation.intent)
+        .order_by(desc(func.count(Conversation.id)))
+        .limit(5)
+    )
+    top_cmds = intent_result.all()
+
+    # Recent 5 signups
+    recent_result = await db.execute(
+        select(User).order_by(desc(User.created_at)).limit(5)
+    )
+    recent = recent_result.scalars().all()
+
+    lines = [
+        f"*JewelClaw Dashboard*",
+        f"_{now.strftime('%d %b %Y, %I:%M %p IST')}_",
+        "",
+        f"*Users:* {total} total | {new_today} today | {new_week} this week",
+        f"*Onboarded:* {onboarded} | *Brief subs:* {subscribers}",
+        "",
+        f"*Active:* {active_24h} (24h) | {active_7d} (7d)",
+        f"*Messages:* {total_msgs} total | {msgs_today} today",
+    ]
+
+    if top_cmds:
+        lines.append("")
+        lines.append("*Top commands (7d):*")
+        for intent, cnt in top_cmds:
+            lines.append(f"  {intent}: {cnt}")
+
+    if recent:
+        lines.append("")
+        lines.append("*Recent signups:*")
+        for u in recent:
+            name = u.name or "unnamed"
+            phone_masked = "***" + u.phone_number[-4:]
+            city = u.preferred_city or "-"
+            lines.append(f"  {name} ({phone_masked}) {city}")
+
+    return "\n".join(lines)
+
+
 async def handle_command(db: AsyncSession, user, command: str, phone_number: str, is_new_user: bool = False, message_body: str = "") -> str:
     """Handle fast-path commands for onboarded users."""
     city = user.preferred_city or "Mumbai"
@@ -634,6 +716,13 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
                 )
 
         return greeting
+
+    # STATS → Admin only (owner's phone number)
+    if command == "stats":
+        owner_phones = ["+918928731453", "918928731453", " 918928731453"]
+        if user.phone_number.strip() not in [p.strip() for p in owner_phones]:
+            return "This command is only available for admins."
+        return await generate_stats_message(db)
 
     # HELP → Interactive numbered feature menu
     if command == "help":
