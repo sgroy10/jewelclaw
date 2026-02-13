@@ -22,32 +22,37 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-# RSS feeds for jewelry industry news (all free, no API keys needed)
+# RSS feeds for jewelry industry news — broad coverage, not brand-specific
 JEWELRY_RSS_FEEDS = [
     {
-        "url": "https://news.google.com/rss/search?q=Tanishq+OR+%22Kalyan+Jewellers%22+OR+%22Malabar+Gold%22+OR+%22Titan+Company%22+jewellery+launch+store&hl=en-IN&gl=IN&ceid=IN:en",
-        "name": "Indian Brands",
-        "source": "google_news_brands",
+        "url": "https://news.google.com/rss/search?q=%22gold+price%22+OR+%22gold+rate%22+india+today&hl=en-IN&gl=IN&ceid=IN:en",
+        "name": "Gold Price India",
+        "source": "google_news_gold",
     },
     {
-        "url": "https://news.google.com/rss/search?q=jewelry+industry+india+collection+GJEPC+exhibition+%22jewelry+show%22&hl=en-IN&gl=IN&ceid=IN:en",
-        "name": "India Industry",
+        "url": "https://news.google.com/rss/search?q=%22jewellery+industry%22+OR+%22jewelry+market%22+OR+%22gems+and+jewellery%22+india&hl=en-IN&gl=IN&ceid=IN:en",
+        "name": "Jewelry Industry India",
         "source": "google_news_industry",
     },
     {
-        "url": "https://news.google.com/rss/search?q=Cartier+OR+Tiffany+OR+Bulgari+OR+%22Van+Cleef%22+OR+Chopard+jewelry+collection+launch&hl=en&gl=US&ceid=US:en",
-        "name": "Global Luxury",
-        "source": "google_news_luxury",
-    },
-    {
-        "url": "https://news.google.com/rss/search?q=gold+import+duty+india+RBI+hallmark+policy+SEBI+commodity&hl=en-IN&gl=IN&ceid=IN:en",
-        "name": "Regulation",
+        "url": "https://news.google.com/rss/search?q=gold+import+duty+OR+hallmark+OR+GJEPC+OR+%22BIS+hallmark%22+OR+%22gold+ETF%22+india&hl=en-IN&gl=IN&ceid=IN:en",
+        "name": "Gold Policy & Regulation",
         "source": "google_news_regulation",
     },
     {
-        "url": "https://news.google.com/rss/search?q=%22jewelry+trend%22+OR+%22jewellery+trend%22+OR+%22bridal+jewelry%22+2026&hl=en&gl=US&ceid=US:en",
+        "url": "https://news.google.com/rss/search?q=%22diamond+industry%22+OR+%22lab+grown+diamond%22+OR+%22Surat+diamond%22+OR+%22polished+diamond%22&hl=en-IN&gl=IN&ceid=IN:en",
+        "name": "Diamond Industry",
+        "source": "google_news_diamond",
+    },
+    {
+        "url": "https://news.google.com/rss/search?q=%22jewelry+trend%22+OR+%22jewellery+design%22+OR+%22bridal+jewellery%22+OR+%22wedding+jewelry%22&hl=en&gl=US&ceid=US:en",
         "name": "Global Trends",
         "source": "google_news_trends",
+    },
+    {
+        "url": "https://news.google.com/rss/search?q=silver+price+OR+platinum+price+OR+%22precious+metals%22+market&hl=en&gl=US&ceid=US:en",
+        "name": "Precious Metals",
+        "source": "google_news_metals",
     },
 ]
 
@@ -64,18 +69,42 @@ class IndustryNewsService:
             self._client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
         return self._client
 
+    def _parse_pub_date(self, date_str: str) -> Optional[datetime]:
+        """Parse RSS pubDate string to datetime."""
+        from email.utils import parsedate_to_datetime
+        try:
+            return parsedate_to_datetime(date_str)
+        except Exception:
+            return None
+
+    def _normalize_headline(self, headline: str) -> str:
+        """Normalize headline for fuzzy dedup — strip filler words and lowercase."""
+        import re
+        text = headline.lower()
+        # Remove source attribution like " - Economic Times" at the end
+        text = re.sub(r'\s*[-–|]\s*[\w\s]+$', '', text)
+        # Remove common filler words
+        for word in ["inaugurates", "inaugurated", "inauguration", "opens", "opened",
+                      "launches", "launched", "unveils", "unveiled", "announces",
+                      "announced", "new", "the", "a", "an", "in", "at", "for", "of", "to"]:
+            text = re.sub(rf'\b{word}\b', '', text)
+        # Collapse whitespace
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+
     async def scrape_all_feeds(self, db: AsyncSession) -> List[Dict]:
         """Scrape all RSS feeds and return new (non-duplicate) headlines."""
         from app.models import IndustryNews
 
         all_headlines = []
+        age_cutoff = datetime.utcnow() - timedelta(hours=48)
 
         async with httpx.AsyncClient(timeout=15) as client:
             for feed in JEWELRY_RSS_FEEDS:
                 try:
                     resp = await client.get(
                         feed["url"],
-                        headers={"User-Agent": "Mozilla/5.0 (compatible; JewelClaw/1.0)"},
+                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
                     )
                     if resp.status_code != 200:
                         logger.warning(f"RSS feed {feed['name']} returned {resp.status_code}")
@@ -87,14 +116,24 @@ class IndustryNewsService:
                     for item in items[:10]:  # Max 10 per feed
                         title_el = item.find('title')
                         link_el = item.find('link')
-                        if title_el is not None and title_el.text:
-                            headline = title_el.text.strip()
-                            link = link_el.text.strip() if link_el is not None and link_el.text else ""
-                            all_headlines.append({
-                                "headline": headline,
-                                "source_url": link,
-                                "source": feed["source"],
-                            })
+                        pub_el = item.find('pubDate')
+
+                        if title_el is None or not title_el.text:
+                            continue
+
+                        # Skip articles older than 48 hours by publish date
+                        if pub_el is not None and pub_el.text:
+                            pub_date = self._parse_pub_date(pub_el.text)
+                            if pub_date and pub_date.replace(tzinfo=None) < age_cutoff:
+                                continue
+
+                        headline = title_el.text.strip()
+                        link = link_el.text.strip() if link_el is not None and link_el.text else ""
+                        all_headlines.append({
+                            "headline": headline,
+                            "source_url": link,
+                            "source": feed["source"],
+                        })
 
                     logger.info(f"RSS {feed['name']}: fetched {min(len(items), 10)} items")
 
@@ -107,20 +146,35 @@ class IndustryNewsService:
             logger.info("No headlines scraped from any feed")
             return []
 
-        # Deduplicate against DB (last 48 hours)
-        cutoff = datetime.now() - timedelta(hours=48)
+        # Deduplicate against DB (last 7 days for wider dedup window)
+        db_cutoff = datetime.utcnow() - timedelta(days=7)
         result = await db.execute(
             select(IndustryNews.headline)
-            .where(IndustryNews.scraped_at >= cutoff)
+            .where(IndustryNews.scraped_at >= db_cutoff)
         )
         existing_headlines = {row[0].lower() for row in result.fetchall()}
+        existing_normalized = {self._normalize_headline(h) for h in existing_headlines}
 
-        new_headlines = [
-            h for h in all_headlines
-            if h["headline"].lower() not in existing_headlines
-        ]
+        new_headlines = []
+        seen_normalized = set()
+        for h in all_headlines:
+            lower = h["headline"].lower()
+            normalized = self._normalize_headline(h["headline"])
 
-        logger.info(f"Industry news: {len(all_headlines)} total, {len(new_headlines)} new")
+            # Skip exact match
+            if lower in existing_headlines:
+                continue
+            # Skip fuzzy match (same story, different wording)
+            if normalized in existing_normalized or normalized in seen_normalized:
+                continue
+            # Skip very short headlines (usually junk)
+            if len(normalized) < 10:
+                continue
+
+            new_headlines.append(h)
+            seen_normalized.add(normalized)
+
+        logger.info(f"Industry news: {len(all_headlines)} scraped, {len(new_headlines)} new after dedup")
         return new_headlines
 
     async def categorize_and_save(self, db: AsyncSession, headlines: List[Dict]) -> int:
@@ -274,14 +328,19 @@ Return ONLY a JSON array, nothing else."""
         await db.flush()
 
     async def get_recent(self, db: AsyncSession, limit: int = 10) -> list:
-        """Get recent news items for the 'news' command."""
+        """Get recent news items for the 'news' command. Prioritizes fresh, high-priority items."""
         from app.models import IndustryNews
 
-        cutoff = datetime.now() - timedelta(hours=24)
+        # Show last 48 hours, prioritize high/medium, newest first
+        cutoff = datetime.utcnow() - timedelta(hours=48)
         result = await db.execute(
             select(IndustryNews)
             .where(IndustryNews.scraped_at >= cutoff)
-            .order_by(desc(IndustryNews.scraped_at))
+            .order_by(
+                desc(IndustryNews.priority == "high"),
+                desc(IndustryNews.priority == "medium"),
+                desc(IndustryNews.scraped_at),
+            )
             .limit(limit)
         )
         return list(result.scalars().all())
