@@ -135,6 +135,18 @@ COMMANDS = {
     "news": "news",
     "industry": "news",
     "jewelry news": "news",
+
+    # Intraday Gold Alerts
+    "alerts": "alerts",
+    "alerts on": "alerts_on",
+    "alerts off": "alerts_off",
+    "alert on": "alerts_on",
+    "alert off": "alerts_off",
+    "my alerts": "alerts",
+    "alerts clear": "alerts_clear",
+    "alert clear": "alerts_clear",
+    "buy alert": "buy_alert",
+    "sell alert": "sell_alert",
 }
 
 

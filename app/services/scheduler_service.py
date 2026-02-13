@@ -17,6 +17,7 @@ from app.services.reminder_service import reminder_service
 from app.services.background_agent_service import background_agent
 from app.services.festival_calendar_service import festival_calendar_service
 from app.services.industry_news_service import industry_news_service
+from app.services.intraday_alerts_service import intraday_alerts_service
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,15 @@ class SchedulerService:
             CronTrigger(hour="6,10,14,18,22", minute=15, timezone=IST),
             id="industry_news",
             name="Jewelry Industry News Scrape",
+            replace_existing=True
+        )
+
+        # Intraday Gold Alerts: COMEX Overnight Signal at 6:30 AM IST
+        self.scheduler.add_job(
+            self.send_comex_overnight_signal,
+            CronTrigger(hour=6, minute=30, timezone=IST),
+            id="comex_overnight",
+            name="COMEX Overnight Gold Signal",
             replace_existing=True
         )
 
@@ -365,6 +375,15 @@ class SchedulerService:
                     except Exception as e:
                         logger.error(f"Price alert check failed: {e}")
 
+                    # Intraday Gold Alerts — standalone check
+                    try:
+                        await intraday_alerts_service.check_and_alert(
+                            db,
+                            gold_24k=mumbai_rate.gold_24k,
+                        )
+                    except Exception as e:
+                        logger.error(f"Intraday alert check failed: {e}")
+
         except Exception as e:
             logger.error(f"Error in rate scraping job: {e}")
 
@@ -570,6 +589,16 @@ class SchedulerService:
                 logger.info("INDUSTRY NEWS: Scrape complete")
         except Exception as e:
             logger.error(f"Industry news scrape error: {e}")
+
+    async def send_comex_overnight_signal(self):
+        """Send COMEX overnight gold movement signal at 6:30 AM IST."""
+        logger.info("COMEX OVERNIGHT: Checking overnight gold movement")
+        try:
+            async with get_db_session() as db:
+                await intraday_alerts_service.send_comex_overnight(db)
+                await db.commit()
+        except Exception as e:
+            logger.error(f"COMEX overnight signal error: {e}")
 
     def get_job_status(self) -> dict:
         """Get status of all scheduled jobs."""

@@ -14,7 +14,7 @@ from sqlalchemy import select, desc, func
 from app.config import settings
 from app.database import init_db, close_db, get_db, reset_db
 # Import models to ensure they're registered with Base.metadata
-from app.models import User, Conversation, MetalRate, BusinessMemory, ConversationSummary, Reminder, FestivalCalendar, IndustryNews
+from app.models import User, Conversation, MetalRate, BusinessMemory, ConversationSummary, Reminder, FestivalCalendar, IndustryNews, IntradayAlertLog
 from app.services.whatsapp_service import whatsapp_service
 from app.services.agent_service import agent_service
 from app.services.gold_service import metal_service
@@ -202,24 +202,31 @@ What you get:
 - *portfolio* - See your current holdings & value
 - *clear inventory* - Reset your holdings""",
 
-    "5": """*Price Alerts - Never Miss a Deal*
+    "5": """*Intraday Gold Alerts - Real-Time Price Intelligence*
 
-Set a target price and I'll WhatsApp you the moment gold hits it - even at 2 AM!
+Get instant WhatsApp alerts when gold moves — even at 2 AM!
 
-Just say:
-_"Alert me when gold drops below 7000"_
-_"Notify me if gold goes above 8000"_
-_"Buy alert at 6500"_
+*Quick setup:*
+• *alerts on* — Turn on intraday alerts
+• *buy alert 6800* — Alert when gold drops below ₹6,800
+• *sell alert 7200* — Alert when gold rises above ₹7,200
+• *my alerts* — Check your settings
+• *alerts off* — Pause alerts
+• *alerts clear* — Remove buy/sell targets
 
-How it works:
-- I check gold every 15 minutes
-- When price crosses your target → instant WhatsApp message
-- Works 24/7, even while you sleep
+*What triggers an alert:*
+• Big moves (>1% in 15 min)
+• Your buy/sell target hit
+• New day high or low
+• 7-day or 30-day breakout
+• Overnight COMEX signal (6:30 AM)
 
-Perfect for:
-- Buying dips automatically
-- Selling at your target price
-- Tracking market movements""",
+*Anti-spam:*
+• Max 3 alerts per day
+• 1 hour cooldown between alerts
+• Target alerts fire once per day
+
+_I check gold every 15 minutes during market hours (9 AM - 9 PM)_""",
 
     "6": """*Pricing Engine - Your Complete Pricing Profile*
 
@@ -785,6 +792,13 @@ async def handle_command(db: AsyncSession, user, command: str, phone_number: str
         return await handle_industry_news_command(db, user, phone_number)
 
     # ==========================================================================
+    # INTRADAY GOLD ALERTS
+    # ==========================================================================
+
+    if command in ("alerts", "alerts_on", "alerts_off", "alerts_clear", "buy_alert", "sell_alert"):
+        return await handle_intraday_alert_command(db, user, command, message_body)
+
+    # ==========================================================================
     # PRICING ENGINE COMMANDS
     # ==========================================================================
 
@@ -828,6 +842,84 @@ async def handle_industry_news_command(db: AsyncSession, user, phone_number: str
 
     news_items = await industry_news_service.get_recent(db, limit=8)
     return industry_news_service.format_news_message(news_items)
+
+
+async def handle_intraday_alert_command(db: AsyncSession, user, command: str, message_body: str) -> str:
+    """Handle all intraday gold alert commands."""
+    import re
+    from app.services.intraday_alerts_service import intraday_alerts_service
+
+    # ALERTS ON
+    if command == "alerts_on":
+        user.intraday_alerts_enabled = True
+        await db.flush()
+        return (
+            "📊 *Intraday Gold Alerts: ON!*\n\n"
+            "You'll get real-time alerts for:\n"
+            "• Big price moves (>1%)\n"
+            "• Day highs and lows\n"
+            "• Multi-day breakouts\n"
+            "• Overnight COMEX signals (6:30 AM)\n\n"
+            "Set targets for precise alerts:\n"
+            "• *buy alert 6800* — Alert when gold drops below ₹6,800\n"
+            "• *sell alert 7200* — Alert when gold rises above ₹7,200\n\n"
+            "_Max 3 alerts/day | 1hr cooldown | Reply 'my alerts' to check status_"
+        )
+
+    # ALERTS OFF
+    if command == "alerts_off":
+        user.intraday_alerts_enabled = False
+        await db.flush()
+        return "📴 Intraday alerts paused. Your targets are saved — type *alerts on* to resume anytime."
+
+    # ALERTS CLEAR
+    if command == "alerts_clear":
+        user.intraday_buy_target = None
+        user.intraday_sell_target = None
+        await db.flush()
+        return "✅ Buy and sell targets cleared. You'll still get big-move and day-high/low alerts if alerts are on."
+
+    # BUY ALERT [price]
+    if command == "buy_alert":
+        price_match = re.search(r'(\d[\d,]*(?:\.\d+)?)', message_body)
+        if not price_match:
+            return "Please specify a price. Example: *buy alert 6800*"
+        price = float(price_match.group(1).replace(",", ""))
+        if price < 1000 or price > 50000:
+            return "Please enter a realistic gold price between ₹1,000 and ₹50,000 per gram."
+        user.intraday_buy_target = price
+        if not user.intraday_alerts_enabled:
+            user.intraday_alerts_enabled = True
+        await db.flush()
+        return (
+            f"🎯 *Buy alert set: ₹{price:,.0f}/gm*\n\n"
+            f"I'll alert you when gold 24K drops to or below ₹{price:,.0f}.\n"
+            f"Alerts are {'already' if user.intraday_alerts_enabled else 'now'} *ON*.\n\n"
+            f"_Reply 'my alerts' to see all your settings_"
+        )
+
+    # SELL ALERT [price]
+    if command == "sell_alert":
+        price_match = re.search(r'(\d[\d,]*(?:\.\d+)?)', message_body)
+        if not price_match:
+            return "Please specify a price. Example: *sell alert 7200*"
+        price = float(price_match.group(1).replace(",", ""))
+        if price < 1000 or price > 50000:
+            return "Please enter a realistic gold price between ₹1,000 and ₹50,000 per gram."
+        user.intraday_sell_target = price
+        if not user.intraday_alerts_enabled:
+            user.intraday_alerts_enabled = True
+        await db.flush()
+        return (
+            f"📊 *Sell alert set: ₹{price:,.0f}/gm*\n\n"
+            f"I'll alert you when gold 24K rises to or above ₹{price:,.0f}.\n"
+            f"Alerts are {'already' if user.intraday_alerts_enabled else 'now'} *ON*.\n\n"
+            f"_Reply 'my alerts' to see all your settings_"
+        )
+
+    # MY ALERTS (default for "alerts" command)
+    status = await intraday_alerts_service.get_user_alert_status(db, user.id)
+    return intraday_alerts_service.format_alert_status(status)
 
 
 async def handle_image_upload(db: AsyncSession, user, media_url: str, message_body: str, phone_number: str) -> str:
@@ -1725,6 +1817,51 @@ async def migrate_remindgenie():
             logger.info("RemindGenie migration complete")
 
         return {"status": "success", "message": "RemindGenie table created (reminders)"}
+
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "detail": traceback.format_exc()}
+
+
+@app.post("/admin/migrate-intraday-alerts")
+async def migrate_intraday_alerts():
+    """Create intraday_alert_log table and add alert columns to users."""
+    from sqlalchemy import text
+    from app.database import engine
+
+    try:
+        async with engine.begin() as conn:
+            # Add intraday alert columns to users
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS intraday_alerts_enabled BOOLEAN DEFAULT FALSE"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS intraday_buy_target FLOAT"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS intraday_sell_target FLOAT"
+            ))
+
+            # Create intraday_alert_log table
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS intraday_alert_log (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    alert_type VARCHAR(50) NOT NULL,
+                    gold_price FLOAT NOT NULL,
+                    message TEXT,
+                    sent_at TIMESTAMP DEFAULT NOW()
+                )
+            """))
+
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_intraday_alert_user_sent
+                ON intraday_alert_log(user_id, sent_at)
+            """))
+
+            logger.info("Intraday alerts migration complete")
+
+        return {"status": "success", "message": "Intraday alerts table + user columns created"}
 
     except Exception as e:
         import traceback

@@ -58,6 +58,11 @@ class User(Base):
     onboarding_completed = Column(Boolean, default=False)
     total_ai_interactions = Column(Integer, default=0)
 
+    # Intraday Gold Alerts
+    intraday_alerts_enabled = Column(Boolean, default=False)
+    intraday_buy_target = Column(Float, nullable=True)  # INR per gram - alert when gold drops below
+    intraday_sell_target = Column(Float, nullable=True)  # INR per gram - alert when gold rises above
+
     # Metadata
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -297,3 +302,26 @@ class ConversationSummary(Base):
     newest_message_id = Column(Integer, nullable=True)
 
     created_at = Column(DateTime, server_default=func.now())
+
+
+# =============================================================================
+# INTRADAY GOLD ALERTS
+# =============================================================================
+
+class IntradayAlertLog(Base):
+    """Log of intraday gold alerts sent to users — for anti-spam and history."""
+
+    __tablename__ = "intraday_alert_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    alert_type = Column(String(50), nullable=False)  # big_move, buy_target, sell_target, day_high, day_low, comex_overnight
+    gold_price = Column(Float, nullable=False)  # Price at time of alert
+    message = Column(Text, nullable=True)  # The alert message sent
+
+    sent_at = Column(DateTime, server_default=func.now(), index=True)
+
+    __table_args__ = (
+        Index("idx_intraday_alert_user_sent", "user_id", "sent_at"),
+    )
